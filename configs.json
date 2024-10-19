@@ -23,7 +23,7 @@
     "focal_distance": 0.2,
 
     "alpha": 0.01,
-    "mu": 20,
+    "mu": 10,
     "gamma": 1,
     "lambda0": 0.01,
     "lambda1": 0.04,

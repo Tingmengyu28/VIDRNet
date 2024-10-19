@@ -49,7 +49,7 @@ class LitDDNet(pl.LightningModule):
             # L_image = l1_norm(aif_images, output_aif_images, self.args['alpha']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda1']
             # L_rec = l1_norm(output_images, images, self.args['gamma'])
             # L_depth = mean_square_error(depths, output_depths, self.args['mu'])
-            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu'])
+            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu']) + tv_norm(output_depths, 0.01)
             L_image = mean_square_error(aif_images, output_aif_images, self.args['alpha'])
             L_rec = mean_square_error(output_images, images, self.args['gamma'])
 
@@ -136,7 +136,7 @@ class LitDDNet(pl.LightningModule):
             output_aif_images = self.rnet(images, output_depths)
             output_depths = output_depths.squeeze()
             output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
-            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu'])
+            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu']) + tv_norm(output_depths, 0.01)
             L_image = mean_square_error(aif_images, output_aif_images, self.args['alpha'])
             L_rec = mean_square_error(output_images, images, self.args['gamma'])
 

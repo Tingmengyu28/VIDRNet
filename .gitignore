@@ -1,6 +1,7 @@
 /.idea
 /.vscode
 /__pycache__
+/build
 /dist
 /draw_post.py
 /encode.py
