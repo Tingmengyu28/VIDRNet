@@ -1,0 +1,137 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from math import exp
+
+
+def mean_square_error(images, pred_images, weight=1):
+    out = nn.MSELoss()(images, pred_images)
+
+    return  torch.mean(out) * weight
+
+def l1_norm(images, pred_images, weight=1):
+    out = nn.L1Loss()(images, pred_images)
+
+    return  torch.mean(out) * weight
+
+def kl_inverse_gamma(depths, pred_depths, weight=1):
+    
+    return weight * torch.mean(pred_depths / depths + torch.log(depths) - torch.log(pred_depths) - 1)
+
+def cross_entropy(D_gt_bi, D_est_bi, weight=1):
+    out = nn.BCEWithLogitsLoss()(D_est_bi, D_gt_bi.squeeze())
+
+    return torch.mean(out) * weight
+
+def distance_entropy(D_est_bi, D_gt, D_focal, lambda1):
+    D_gt_bi = torch.where(D_gt >= D_focal, 1.0, 0.0).unsqueeze(1)
+    entropy_D = cross_entropy(D_gt_bi, D_est_bi, lambda1)
+
+    return entropy_D
+
+def distance_mse(D_est_bi, D_gt, beta_est, D_focal, k_cam):
+    D_est = depth_tranformer(D_est_bi, beta_est, D_focal, k_cam)
+    D_gt = D_gt.unsqueeze(1)
+    rmse_D = nn.MSELoss()(D_est, D_gt)
+
+    return rmse_D
+
+def depth_tranformer(D_est_bi, beta_est, D_focal, k_cam):
+    D_est = torch.zeros_like(D_est_bi, requires_grad=False, dtype=D_est_bi.dtype, device=D_est_bi.device)
+    D_est[D_est_bi >= 0] = D_focal * k_cam / (k_cam - beta_est[D_est_bi >= 0])
+    D_est[D_est_bi < 0] = D_focal * k_cam / (k_cam + beta_est[D_est_bi < 0])
+
+    return D_est
+
+
+def _ssim(img1, img2, window, window_size, channel):
+    mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
+    mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
+
+    mu1_sq = mu1.pow(2)
+    mu2_sq = mu2.pow(2)
+    mu1_mu2 = mu1 * mu2
+
+    sigma1_sq = F.conv2d(img1 * img1, window, padding=window_size // 2, groups=channel) - mu1_sq
+    sigma2_sq = F.conv2d(img2 * img2, window, padding=window_size // 2, groups=channel) - mu2_sq
+    sigma12 = F.conv2d(img1 * img2, window, padding=window_size // 2, groups=channel) - mu1_mu2
+
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+    return ssim_map
+
+
+def gaussian(window_size, sigma):
+    gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
+    return gauss / gauss.sum()
+
+def create_window(window_size, channel, mu=1.5):
+    _1D_window = gaussian(window_size, mu).unsqueeze(1)
+    _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
+    window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
+    window.requires_grad = False
+    return window
+
+class SSIM(torch.nn.Module):
+    def __init__(self, window_size=11):
+        super(SSIM, self).__init__()
+        self.window_size = window_size
+        self.channel = 1
+        self.window = create_window(window_size, self.channel)
+
+    def forward(self, img1, img2):
+        (_, channel, _, _) = img1.size()
+
+        if channel == self.channel and self.window.data.type() == img1.data.type():
+            window = self.window
+        else:
+            window = create_window(self.window_size, channel)
+
+            if img1.is_cuda:
+                window = window.cuda(img1.get_device())
+            window = window.type_as(img1)
+
+            self.window = window
+            self.channel = channel
+
+        return _ssim(img1, img2, window, self.window_size, channel)
+
+def cal_ssim(images, pred_images, weight=1):
+    ssim = SSIM()
+    out = ssim(images, pred_images)
+
+    return torch.mean(out) * weight
+
+
+def tv_norm(image, weight=1):
+    if len(image.shape) == 4:
+        diff_i = torch.abs(image[:, :, :, 1:] - image[:, :, :, :-1])
+        diff_j = torch.abs(image[:, :, 1:, :] - image[:, :, :-1, :])
+    elif len(image.shape) == 3:
+        diff_i = torch.abs(image[:, :, 1:] - image[:, :, :-1])
+        diff_j = torch.abs(image[:, 1:, :] - image[:, :-1, :])
+
+    tv_norm = torch.mean(diff_i) + torch.mean(diff_j)
+    return weight * tv_norm
+
+
+def CharbonnierLoss(images, output_images, weight=1):
+    diff = images - output_images
+    loss = torch.mean(torch.sqrt(diff ** 2 + 10 ** -6))
+    return loss * weight
+
+def cal_AbsRel(depths, output_depths):
+    return torch.mean(torch.abs(depths - output_depths) / depths)
+
+
+def cal_delta(depths, output_depths, p):
+    delta1 = output_depths / depths
+    delta2 = depths / output_depths
+    delta = torch.max(delta1, delta2)
+    threshold = 1.25 ** p
+    delta_bi = torch.zeros_like(delta, requires_grad=False, device=delta.device)
+    delta_bi[delta < threshold] = 1
+    return torch.mean(delta_bi)

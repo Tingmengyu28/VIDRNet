@@ -1,0 +1,32 @@
+{
+    "model_name":"DRNet",
+    "batch_size": 8,
+    "max_epochs": 300,
+    "val_ratio": 0.45,
+    "test_ratio": 0,
+    "learning_rate": 1e-4,
+    "min_learning_rate": 1e-8, 
+    "num_workers": 4, 
+    "devices": [2],
+    "precision": "32",
+
+    "eps2": 0.01,
+    "focal_length": 35e-3,
+    "f_number": 2.8,
+    "pixel_size": 56e-7,
+    "depth_min": 1e-3,
+    "depth_max": 10,
+    "save_epoch": 10,
+    "kcam": 1.69,
+    "k_size": 7,
+    "window_size": 7,
+    "focal_distance": 0.2,
+
+    "alpha": 0.01,
+    "mu": 20,
+    "gamma": 1,
+    "lambda0": 0.01,
+    "lambda1": 0.04,
+    "lowest_beta": 0.01,
+    "load_path": "outputs/ckpts/DRNet0.2:gamma1_mu10_alpha0.01:2024-10-13-01-20-15/epoch=269-step=27000.ckpt"
+}
