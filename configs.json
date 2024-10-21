@@ -28,5 +28,5 @@
     "lambda0": 0.01,
     "lambda1": 0.04,
     "lowest_beta": 0.01,
-    "load_path": "outputs/ckpts/DRNet0.2:gamma1_mu10_alpha0.01:2024-10-13-01-20-15/epoch=269-step=27000.ckpt"
+    "load_path": "data/directory"
 }
