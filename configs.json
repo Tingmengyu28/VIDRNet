@@ -28,5 +28,5 @@
     "lambda0": 0.01,
     "lambda1": 0.04,
     "lowest_beta": 0.01,
-    "load_path": "data/directory"
+    "load_path": "data directory"
 }
