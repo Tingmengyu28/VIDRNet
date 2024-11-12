@@ -6,6 +6,7 @@
 /draw_post.py
 /encode.py
 /gauss_psf_cuda.egg-info
+/make3d
 /nyu2_data
 /nyu_depth
 /outputs

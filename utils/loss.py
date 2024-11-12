@@ -118,6 +118,12 @@ def tv_norm(image, weight=1):
     return weight * tv_norm
 
 
+def horizontal_vertical_gradient(image, weight_h, weight_v):
+    diff_i = torch.abs(image[:, :, :, 1:] - image[:, :, :, :-1]) ** 2
+    diff_j = torch.abs(image[:, :, 1:, :] - image[:, :, :-1, :]) ** 2
+    return weight_h * torch.mean(diff_i) + weight_v * torch.mean(diff_j)
+
+
 def CharbonnierLoss(images, output_images, weight=1):
     diff = images - output_images
     loss = torch.mean(torch.sqrt(diff ** 2 + 10 ** -6))

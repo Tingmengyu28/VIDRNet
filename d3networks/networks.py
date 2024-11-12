@@ -31,7 +31,7 @@ def get_norm_layer(norm_type='instance'):
     return norm_layer
 
 
-def define_G(input_nc, output_nc=[1], net_architecture='DenseUNet', tasks=['depth'], pretrained=True, n_classes=1000):
+def define_G(input_nc, output_nc=[1], net_architecture='DenseUNet', tasks=['depth'], pretrained=True, n_classes=1000, model_name='2HDEDNet'):
     netG = None
     # use_gpu = len(gpu_ids) > 0
     # norm_layer = get_norm_layer(norm_type=norm)
@@ -41,6 +41,7 @@ def define_G(input_nc, output_nc=[1], net_architecture='DenseUNet', tasks=['dept
                         input_nc=input_nc,
                         outputs_nc=output_nc,
                         init_method='normal',
+                        model_name=model_name,
                         use_dropout=True,
                         use_skips=True,
                         d_block_type='basic',

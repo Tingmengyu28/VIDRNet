@@ -32,7 +32,7 @@ model_urls = {
 normalization_layer = nn.BatchNorm2d
 # normalization_layer = nn.LayerNorm
 
-def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', version=1, type_net="t", **kwargs):
+def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', version=1, type_net="t", model_name='2HDEDNet', **kwargs):
     r"""Densenet-121 model from
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
     Args:
@@ -40,8 +40,12 @@ def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', v
     """
 
     d_block = BasicBlock
-    model = DenseUNet_v2(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
-                        **kwargs)
+    if model_name == 'VIDRNet':
+        model = DenseUNet_v2(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
+                            **kwargs)
+    elif model_name == '2HDEDNet':
+        model = DenseUNet_aif(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
+                            **kwargs)
 
     if pretrained:
         w_init.init_weights(model, init_method)
@@ -541,3 +545,267 @@ class DenseUNet_v2(nn.Module):
             output.append(out_task)
 
         return output
+
+
+class DenseUNet_aif(nn.Module):
+    """Densenet-BC model class, based on
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    Args:
+        growth_rate (int) - how many filters to add each layer (`k` in paper)
+        block_config (list of 4 ints) - how many layers in each pooling block
+        num_init_features (int) - the number of filters to learn in the first convolution layer
+        bn_size (int) - multiplicative factor for number of bottle neck layers
+          (i.e. bn_size * k features in the bottleneck layer)
+        drop_rate (float) - dropout rate after each dense layer
+        num_classes (int) - number of classification classes
+    """
+
+    def __init__(self, d_block, input_nc=3, outputs_nc=[1], growth_rate=32,
+                 block_config=(6, 12, 24, 16), num_init_features=64, bn_size=4,
+                 drop_rate=0, num_classes=1000, use_dropout=False, use_skips=True,
+                 bilinear_trick=False, outputSize=[427, 571], tasks=['depth']):
+
+        super(DenseUNet_aif, self).__init__()
+
+        self.use_skips = use_skips
+        self.bilinear_trick = bilinear_trick
+        self.tasks = tasks
+        # for GradNorm
+        # self.register_parameter('omegas', None) # not needed, wanted to do this outside, but the optimizer is not taking it into account
+        # self._reset_omegas(len(tasks))
+
+        # self.omegas = torch.nn.Parameter(torch.ones(len(tasks)).float())
+        if self.use_skips:
+            ngf_mult = 2
+        else:
+            ngf_mult = 1
+
+        self.relu_type = nn.LeakyReLU(0.2, inplace=True)     # nn.ReLU(inplace=True)
+
+        # First convolution
+        self.features = nn.Sequential(OrderedDict([
+            ('conv0', nn.Conv2d(input_nc, num_init_features, kernel_size=3, stride=2, padding=1, bias=False)),
+            ('norm0', normalization_layer(num_init_features)),
+            ('relu0', self.relu_type),
+            # ('pool0', nn.MaxPool2d(kernel_size=3, stride=2, padding=1)),
+            ('downconv0', nn.Conv2d(num_init_features, num_init_features, kernel_size=4, stride=2,
+                                    padding=1, bias=False)),
+            ('norm1', normalization_layer(num_init_features)),
+            ('relu1', self.relu_type)
+        ]))
+
+        # Each denseblock
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            block = _DenseBlock(num_layers=num_layers,
+                                num_input_features=num_features,
+                                bn_size=bn_size, growth_rate=growth_rate, drop_rate=drop_rate)
+            self.features.add_module('denseblock%d' % (i + 1), block)
+            num_features = num_features + num_layers * growth_rate
+            if i != len(block_config) - 1:
+                trans = _Transition(num_input_features=num_features, num_output_features=num_features // 2)
+                self.features.add_module('transition%d' % (i + 1), trans)
+                self.features.add_module('transition%dpool' % (i + 1), nn.AvgPool2d(kernel_size=2, stride=2))
+                num_features = num_features // 2
+
+        # Final batch norm
+        self.features.add_module('norm5', normalization_layer(num_features))
+
+        # Linear layer
+        # self.classifier = nn.Linear(num_features, num_classes)
+        num_features_aif = num_features
+
+        self.decoder = nn.Sequential()
+        # for i in reversed(range(2, 6)): # common decoder until block 3
+        for i in reversed(range(3, 6)): # common decoder until block 3
+            mult = 1 if i == 5 else ngf_mult
+            dropout = use_dropout if i > 3 else False
+            self.decoder.add_module('d_block{}'.format(i),
+                                    self._make_decoder_layer(num_features * mult,
+                                                             int(num_features / 2), block=d_block,
+                                                             use_dropout=dropout))
+            num_features = int(num_features / 2)
+        
+        mult = ngf_mult
+        self.decoder_tasks = nn.ModuleList()
+        # each decoder block
+        for task_i in range(len(tasks)):
+            print(task_i)
+            task_block = nn.Sequential()
+            task_block.add_module('d_block{}'.format(i - 1), # 2
+                                self._make_decoder_layer(num_features * mult,
+                                                        num_features // 2, block=d_block,
+                                                        use_dropout=False))
+
+            num_features = num_features // 2
+
+            task_block.add_module('d_block{}'.format(i-2), # 1
+                                self._make_decoder_layer(num_features * mult,
+                                                        num_features, block=d_block,
+                                                        use_dropout=False))
+
+            task_block.add_module('last_conv',
+                                        conv3x3(num_features, outputs_nc[task_i]))
+
+            self.decoder_tasks.append(task_block)
+
+            num_features = num_features * 2
+        
+        # We add our AIF decoder:
+        self.decoder_aif = nn.Sequential()
+        # for i in reversed(range(2, 6)): # common decoder until block 3
+        for i in reversed(range(3, 6)): # common decoder until block 3
+            mult = 1 if i == 5 else ngf_mult
+            dropout = use_dropout if i > 3 else False
+            self.decoder_aif.add_module('d_aif_block{}'.format(i),
+                                         self._make_decoder_layer(num_features_aif * mult,
+                                                             int(num_features_aif / 2), block=d_block,
+                                                             use_dropout=dropout))
+            num_features_aif = int(num_features_aif / 2)
+        
+        mult = ngf_mult
+        # each decoder block
+        self.decoder_aif.add_module('d_aif_block{}'.format(i - 1), # 2
+                                self._make_decoder_layer(num_features_aif * mult,
+                                                        num_features_aif // 2, block=d_block,
+                                                        use_dropout=False))
+        num_features_aif = num_features_aif // 2
+
+        self.decoder_aif.add_module('d_aif_block{}'.format(i-2), # 1
+                            self._make_decoder_layer(num_features_aif * mult,
+                                                    num_features_aif, block=d_block,
+                                                    use_dropout=False))
+
+        self.decoder_aif.add_module('last_aif_conv',
+                                    conv3x3(num_features_aif, 3))
+        
+        # self.aif_head_act = nn.Tanh()
+
+
+        num_features_aif = num_features_aif * 2
+
+    # def _reset_omegas(self, size):
+    #     self.omegas = nn.Parameter(torch.ones(size).float())
+
+    def _make_decoder_layer(self, inplanes, outplanes, block, use_dropout=True):
+        layers = []
+        layers.append(block(inplanes, outplanes, upsample=True, use_dropout=use_dropout))
+        return nn.Sequential(*layers)
+
+    def get_decoder_input(self, e_out, d_out):
+        if self.use_skips:
+            return cat((e_out, d_out), 1)
+        else:
+            return d_out
+
+    def forward(self, x):
+        # features = self.features(x)
+        # input is ngf x 256 x 256
+        out = self.features.conv0(x)
+        out = self.features.norm0(out)
+        out_conv1 = self.features.relu0(out)
+        #print("1st encoder layer: {}".format(out_conv1.shape))
+        
+        
+        # input is ngf x 128 x 128
+        out = self.features.downconv0(out_conv1)
+        out = self.features.norm1(out)
+        out = self.features.relu1(out)
+
+        # input is ngf x 64 x 64
+        out = self.features.denseblock1(out)
+        
+        # input is ngf * 4 x 64 x 64
+        tb_denseblock1 = self.features.transition1(out)     # transition block
+       
+        # input is ngf * 2 x 64 x 64
+        out = self.features.transition1pool(tb_denseblock1)
+        # input is ngf * 2 x 32 x 32
+        out = self.features.denseblock2(out)
+        # input is ngf * 8 x 32 x 32
+        tb_denseblock2 = self.features.transition2(out)
+        
+        # input is ngf * 4 x 32 x 32
+        out = self.features.transition2pool(tb_denseblock2)
+        # input is ngf * 4 x 16 x 16
+        out = self.features.denseblock3(out)
+        # input is ngf * 16 x 16 x 16
+        tb_denseblock3 = self.features.transition3(out)
+              
+        # input is ngf * 16 x 16 x 16
+        out = self.features.transition3pool(tb_denseblock3)
+        # input is ngf * 8 x 8 x 8
+        out = self.features.denseblock4(out)
+        
+        # input is ngf * 16 x 8 x 8
+        out = self.features.norm5(out)
+        out = self.relu_type(out)
+        #print("Last encoder layer: {}".format(out.shape))
+        # print(out.layout)
+        # print("Last encoder layer: {}".format(out.size))
+        
+        
+        out_aif = out
+        
+        # Here comes the decoder
+        # input is ngf * 16 x 8 x 8
+        out = self.decoder.d_block5(out)
+        # print("1st decoder layer: {}".format(out.shape))
+       
+        # input is (ngf * 8) x 16 x 16
+        out = self.decoder.d_block4(self.get_decoder_input(tb_denseblock3, out))
+        # print("2nd decoder layer: {}".format(out.shape))
+        
+        # input is (ngf * 4) x 32 x 32
+        # last common layer for MTL
+        out_d3 = self.decoder.d_block3(self.get_decoder_input(tb_denseblock2, out))
+        # print("3rd decoder layer: {}".format(out.shape))
+        
+        self.last_common_layer = self.decoder.d_block3
+        
+        output = []
+        
+        # if 'depth' in self.tasks:
+        for task_i in range(len(self.tasks)):
+            # input is (ngf * 2) x 64 x 64
+            # out_d2 = self.decoder_tasks.taski_block2()
+            out_reg_d2 =self.decoder_tasks[task_i].d_block2(self.get_decoder_input(tb_denseblock1, out_d3))
+            # input is ngf x 128 x 128
+            out_reg_d1 =self.decoder_tasks[task_i].d_block1(self.get_decoder_input(out_conv1, out_reg_d2))
+            # input is ngf x 256 x 256
+            out_reg = self.decoder_tasks[task_i].last_conv(out_reg_d1)
+            output.append(out_reg)
+           # print("Last DED decoder layer: {}".format(out_reg.shape))
+            
+        
+        # Compute aif_pred from x
+        #####################VVVVVVVVVVVVVVVVVVVVV#############
+        # input is ngf * 16 x 8 x 8
+        out_aif = self.decoder_aif.d_aif_block5(out_aif)
+        # input is (ngf * 8) x 16 x 16
+        out_aif = self.decoder_aif.d_aif_block4(self.get_decoder_input(tb_denseblock3, out_aif))
+        # input is (ngf * 4) x 32 x 32
+        # last common layer for MTL
+        out_d3 = self.decoder_aif.d_aif_block3(self.get_decoder_input(tb_denseblock2, out_aif))
+        
+        # input is (ngf * 2) x 64 x 64
+        # out_d2 = self.decoder_tasks.taski_block2()
+        out_reg_d2 =self.decoder_aif.d_aif_block2(self.get_decoder_input(tb_denseblock1, out_d3))
+        # input is ngf x 128 x 128
+        out_reg_d1 =self.decoder_aif.d_aif_block1(self.get_decoder_input(out_conv1, out_reg_d2))
+        # input is ngf x 256 x 256
+        out_reg = self.decoder_aif.last_aif_conv(out_reg_d1)
+        # out_reg = self.aif_head_act(out_reg)
+        out_reg = out_reg + x
+        
+        aif_pred = out_reg
+       # print("Last AIFD decoder layer: {}".format(aif_pred.shape))
+       
+        # print(aif_pred.size())
+        # print(output.size())
+        
+        return output, aif_pred
+
+  
+    def get_last_common_layer(self):
+        return self.last_common_layer
