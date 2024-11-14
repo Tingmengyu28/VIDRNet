@@ -1,7 +1,7 @@
 {
     "dataset": "nyuv2",
     "model_name": "VIDRNet",
-    "batch_size": 8,
+    "batch_size": 16,
     "max_epochs": 300,
     "val_ratio": 0.45,
     "test_ratio": 0,
@@ -9,12 +9,12 @@
     "min_learning_rate": 1e-8,
     "num_workers": 4,
     "devices": [
-        3
+        2
     ],
     "precision": "32",
     "eps2": 0.01,
-    "focal_length": 35e-3,
-    "f_number": 1,
+    "focal_length": 70e-3,
+    "f_number": 1.56,
     "pixel_size": 56e-7,
     "depth_min": 1e-3,
     "depth_max": 10,

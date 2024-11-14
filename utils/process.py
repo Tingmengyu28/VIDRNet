@@ -50,7 +50,7 @@ class LitDDNet(pl.LightningModule):
             L_rec = mean_square_error(output_images, images, self.args['gamma'])
             L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
 
-            loss = L_depth + L_image + L_rec + L_additional
+            loss = L_depth + L_image + L_rec
             
         elif self.args['model_name'] == 'DRNet':
             output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
@@ -133,7 +133,7 @@ class LitDDNet(pl.LightningModule):
             L_rec = mean_square_error(output_images, images, self.args['gamma'])
             L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
 
-            loss = L_depth + L_image + L_rec + L_additional
+            loss = L_depth + L_image + L_rec
             
         elif self.args['model_name'] == 'DRNet':
             output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
