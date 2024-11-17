@@ -40,7 +40,7 @@ def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', v
     """
 
     d_block = BasicBlock
-    if model_name == 'VIDRNet':
+    if model_name in ['VIDRNet']:
         model = DenseUNet_v2(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
                             **kwargs)
     elif model_name == '2HDEDNet':
