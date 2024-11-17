@@ -20,7 +20,7 @@ def kl_inverse_gamma(depths, pred_depths, weight=1):
 
 def kl_inverse_gaussian(depths, pred_depths, weight=1):
     
-    return weight * (depths - pred_depths) ** 2 / (depths ** 2 * pred_depths)
+    return weight * torch.mean((depths - pred_depths) ** 2 / (depths ** 2 * pred_depths))
 
 def cross_entropy(D_gt_bi, D_est_bi, weight=1):
     out = nn.BCEWithLogitsLoss()(D_est_bi, D_gt_bi.squeeze())
