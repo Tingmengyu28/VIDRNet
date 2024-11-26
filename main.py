@@ -27,7 +27,7 @@ if __name__ == "__main__":
     if args['dataset'] == "nyuv2":
         args['depth_max'] = 10.0
         args['f_number'] = 2.8
-        args['image_size'] = None
+        args['image_size'] = (480, 640)
         data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
         # data_module = NYUDepthDataModule_v2(args=args, batch_size=args['batch_size'])
     elif args['dataset'] == "make3d":

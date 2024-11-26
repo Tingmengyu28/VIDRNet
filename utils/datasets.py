@@ -32,7 +32,7 @@ class NYUDepthDataset(Dataset):
         depth = self.depths_file[index]
         aif_image = self.images_file[index]
         
-        aif_image = torch.from_numpy(aif_image).permute(2, 0, 1).float() / 255
+        aif_image = torch.from_numpy(aif_image).permute(2, 0, 1).float() / 255.0
         depth = torch.from_numpy(depth).float() / int(self.args['depth_max'])
         
         if self.image_size:

@@ -5,6 +5,7 @@ import torch.nn as nn
 import math
 import torch.nn.functional as F
 import torchvision.models as models
+from torchvision.models import densenet121, densenet161
 
 
 def denormalize(image, mean, std):
@@ -60,62 +61,6 @@ def visualize_sample(image, predicted_image, aif_image, predicted_aif_image, dep
     plt.savefig("test.png")
     logger.experiment.add_figure("Sample Visualization", fig, global_step=step)
     plt.close(fig)
-
-# U-Net architecture
-class UNet(nn.Module):
-    def __init__(self, in_chn=1, out_chn=1):
-        super(UNet, self).__init__()
-        self.encoder1 = self.conv_block(in_chn, 64)
-        self.encoder2 = self.conv_block(64, 128)
-        self.encoder3 = self.conv_block(128, 256)
-        self.encoder4 = self.conv_block(256, 512)
-
-        self.bottleneck = self.conv_block(512, 1024)
-
-        self.upconv4 = self.upconv_block(1024, 512)
-        self.decoder4 = self.conv_block(1024, 512)
-        self.upconv3 = self.upconv_block(512, 256)
-        self.decoder3 = self.conv_block(512, 256)
-        self.upconv2 = self.upconv_block(256, 128)
-        self.decoder2 = self.conv_block(256, 128)
-        self.upconv1 = self.upconv_block(128, 64)
-        self.decoder1 = self.conv_block(128, 64)
-
-        self.final_conv = nn.Conv2d(64, out_chn, kernel_size=1)
-
-    def conv_block(self, in_channels, out_channels):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-
-    def upconv_block(self, in_channels, out_channels):
-        return nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
-
-    def forward(self, x):
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(nn.MaxPool2d(kernel_size=2, stride=2)(enc1))
-        enc3 = self.encoder3(nn.MaxPool2d(kernel_size=2, stride=2)(enc2))
-        enc4 = self.encoder4(nn.MaxPool2d(kernel_size=2, stride=2)(enc3))
-
-        bottleneck = self.bottleneck(nn.MaxPool2d(kernel_size=2, stride=2)(enc4))
-
-        dec4 = self.upconv4(bottleneck)
-        dec4 = torch.cat((dec4, enc4), dim=1)
-        dec4 = self.decoder4(dec4)
-        dec3 = self.upconv3(dec4)
-        dec3 = torch.cat((dec3, enc3), dim=1)
-        dec3 = self.decoder3(dec3)
-        dec2 = self.upconv2(dec3)
-        dec2 = torch.cat((dec2, enc2), dim=1)
-        dec2 = self.decoder2(dec2)
-        dec1 = self.upconv1(dec2)
-        dec1 = torch.cat((dec1, enc1), dim=1)
-        dec1 = self.decoder1(dec1)
-
-        return self.final_conv(dec1)
 
 
 class AttLayer(nn.Module):
@@ -290,7 +235,7 @@ class AttResUNet(nn.Module):
         for jj, up in enumerate(self.up_path):
             x = up(x, blocks[-jj-1])
 
-        if self.out_chn < x_in.shape[1]:
+        if self.out_chn != x_in.shape[1]:
             out = self.tail(x)[..., :h, :w]
         else:
             out = self.tail(x)[..., :h, :w] + x_in
@@ -298,176 +243,288 @@ class AttResUNet(nn.Module):
         return out
 
 
-class CustomDenseNetEncoder(nn.Module):
-    def __init__(self):
-        super(CustomDenseNetEncoder, self).__init__()
+class ResBlock(nn.Module):
+    def __init__(self, filters, filter_size, reduction=16, use_bn=False):
+        """Residual Block"""
+        super(ResBlock, self).__init__()
+        self.use_bn = use_bn
 
-        # Load the pre-trained DenseNet121 model
-        densenet = models.densenet121(pretrained=True)
-
-        # Modify the first convolution layer
-        self.features = densenet.features
-        self.features.conv0 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-
-        # Create a list to store the outputs of each layer
-        self.output_layers = []
-
-        # Add the Dense Blocks and Transition Layers
-        self.output_layers.append(self.features.conv0)  # Output: 64x320x240
-
-        self.dense_block1 = self.features.denseblock1  # Block 1
-        self.transition1 = self._make_transition_layer(256, 128)  # Transition 1
-        self.output_layers.append(self.transition1)  # Output: 128x160x120
-
-        self.dense_block2 = self.features.denseblock2  # Block 2
-        self.transition2 = self._make_transition_layer(512, 256)  # Transition 2
-        self.output_layers.append(self.transition2)  # Output: 256x80x60
-
-        self.dense_block3 = self.features.denseblock3  # Block 3
-        self.transition3 = self._make_transition_layer(1024, 512)  # Transition 3
-        self.output_layers.append(self.transition3)  # Output: 512x40x30
-
-        self.dense_block4 = self.features.denseblock4  # Block 4
-        self.transition4 = self._make_transition_layer(1024, 1024)  # Transition 4
-        self.output_layers.append(self.transition4)  # Output: 1024x20x15
-
-    def _make_transition_layer(self, in_channels, out_channels):
-        """Helper function to create a transition layer with Conv2d and AvgPool2d."""
-        return nn.Sequential(
-            nn.BatchNorm2d(in_channels),
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-            nn.AvgPool2d(kernel_size=2, stride=2)
-        )
+        self.conv1 = nn.Conv2d(filters, filters, kernel_size=filter_size, stride=1, padding=filter_size // 2, bias=True)
+        self.conv2 = nn.Conv2d(filters, filters, kernel_size=filter_size, stride=1, padding=filter_size // 2, bias=True)
+        
+        if use_bn:
+            self.bn1 = nn.BatchNorm2d(filters)
+            self.bn2 = nn.BatchNorm2d(filters)
 
     def forward(self, x):
-        outputs = []
-        # Pass through the initial layer
-        x = self.features.conv0(x)
-        x = self.features.norm0(x)
-        x = self.features.relu0(x)
-        outputs.append(x)
+        identity = x
+        x = self.conv1(x)
+        if self.use_bn:
+            x = self.bn1(x)
+        x = F.relu(x)
 
-        # Pass through each dense block and transition layer
-        x = self.dense_block1(x)
-        x = self.transition1(x)  # Output: 128x160x120
-        outputs.append(x)
+        x = self.conv2(x)
+        if self.use_bn:
+            x = self.bn2(x)
 
-        x = self.dense_block2(x)
-        x = self.transition2(x)  # Output: 256x80x60
-        outputs.append(x)
-
-        x = self.dense_block3(x)
-        x = self.transition3(x)  # Output: 512x40x30
-        outputs.append(x)
-
-        x = self.dense_block4(x)
-        x = self.transition4(x)  # Output: 1024x20x15
-        outputs.append(x)
-
-        return outputs  # Return all outputs for skip connections
+        return 0.2 * x + identity
 
 
-class DecoderBlock(nn.Module):
-    def __init__(self, input_channels, output_channels):
-        """
-        :param input_channels: dimension of input channels
-        :param output_channels: dimension of output channels
-        """
-        super(DecoderBlock, self).__init__()
+class ResNet(nn.Module):
+    def __init__(self, filters, filter_size, d_cnn, reduction=16, use_bn=False):
+        """The CNN block to infer smooth, sparse, and noisy information"""
+        super(ResNet, self).__init__()
+        self.input_conv = nn.Conv2d(filters, filters, kernel_size=filter_size, stride=1, padding=filter_size // 2, bias=True)
+        
+        self.res_blocks = nn.ModuleList([
+            ResBlock(filters, filter_size, reduction=reduction, use_bn=use_bn)
+            for _ in range(d_cnn)
+        ])
 
-        self.block = nn.Sequential(
-            nn.ConvTranspose2d(input_channels, output_channels, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(output_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(output_channels, output_channels, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(output_channels),
+    def forward(self, x):
+        identity = self.input_conv(x)
+        out = identity
+        for block in self.res_blocks:
+            out = block(out)
+        return out + identity
+    
+    
+# class vae_Decoder(nn.Module):
+#     """
+#     The code defines a DenseVAE model that includes an encoder using DenseNet121, skip
+#     connections, latent space mappings, and two decoders for image generation.
+    
+#     :param latent_dim: The `latent_dim` parameter represents the dimensionality of the latent
+#     space in the variational autoencoder (VAE) model. It determines the size of the latent
+#     vectors that encode the input data into a lower-dimensional space for learning
+#     representations. In the provided code snippet, the `latent_dim` is
+#     :param output_channels: The `output_channels` parameter in the `Decoder` class represents
+#     the number of channels in the output image generated by the decoder. It is typically used
+#     to match the number of channels in the input image that the decoder is supposed to
+#     reconstruct. In the provided code snippet, `output_channels` is used
+#     :param skip_connections: Skip connections in neural networks refer to connections that
+#     skip one or more layers. They are used to facilitate the flow of gradients during training
+#     and help in overcoming the vanishing gradient problem. In the provided code snippet,
+#     skip_connections are used to pass intermediate features from the encoder to the decoder in
+#     order to improve
+#     :param img_size: The `img_size` parameter represents the size of the input image in terms
+#     of height and width. In this case, it is a tuple `(480, 640)` indicating an image size of
+#     480 pixels in height and 640 pixels in width
+#     """
+#     def __init__(self, latent_dim, output_channels, skip_connections, img_size):
+#         super(vae_Decoder, self).__init__()
+#         self.img_size = img_size
+#         self.skip_connections = skip_connections  # Skip connections from the encoder
+#         self.fc = nn.Linear(latent_dim, 128 * 4 * 4)  # 输出与后续解码器通道和尺寸匹配
+
+#         # Decoder with skip connections
+#         self.deconv_blocks = nn.ModuleList([
+#             self._decoder_block(128, 128),  # Corresponds to 8x8 resolution
+#             self._decoder_block(128, 64),  # Corresponds to 16x16 resolution
+#             self._decoder_block(64, 32),  # Corresponds to 32x32 resolution
+#         ])
+        
+#         # Final convolutional layer
+#         self.final_conv = nn.ConvTranspose2d(32, output_channels, kernel_size=4, stride=2, padding=1)
+#         self.final_activation = nn.Sigmoid()
+
+#     def _decoder_block(self, in_channels, out_channels):
+#         return nn.Sequential(
+#             nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
+#             nn.ReLU(inplace=True)
+#         )
+
+#     def forward(self, z):
+#         B = z.size(0)
+#         z = self.fc(z).view(B, 128, 4, 4)  # Reshape to match decoder input
+
+#         # Apply decoder blocks with skip connections
+#         for i, deconv_block in enumerate(self.deconv_blocks):
+#             z = deconv_block(z)
+#             if i < len(self.skip_connections):  # Apply residual connection if available
+#                 skip = self.skip_connections[-(i + 1)]  # Reverse order of skip connections
+#                 if skip.size() != z.size():  # Adjust size if necessary
+#                     skip = F.interpolate(skip, size=z.size()[2:], mode='bilinear', align_corners=False)
+#                 z = z + skip  # Residual connection
+
+#         # Final output layer
+#         z = self.final_conv(z)
+#         z = F.interpolate(z, size=self.img_size, mode='bilinear', align_corners=False)
+#         return self.final_activation(z)
+
+
+# class DenseVAE(nn.Module):
+#     def __init__(self, latent_dim, input_channels=3, img_size=(480, 640)):
+#         super(DenseVAE, self).__init__()
+#         self.latent_dim = latent_dim
+
+#         # Encoder: DenseNet121
+#         densenet = densenet121(pretrained=True)
+#         self.encoder = nn.Sequential(*list(densenet.features.children()))
+#         encoder_output_dim = 1024  # DenseNet121 最终 feature 的通道数
+
+#         # Skip connection layers
+#         self.skip_layers = [5, 7, 9]  # Select layers for skip connections (example indices)
+#         self.skips = []
+
+#         # Latent space mappings
+#         self.fc_mu1 = nn.Linear(encoder_output_dim, latent_dim)
+#         self.fc_logvar1 = nn.Linear(encoder_output_dim, latent_dim)
+#         self.fc_mu2 = nn.Linear(encoder_output_dim, latent_dim)
+#         self.fc_logvar2 = nn.Linear(encoder_output_dim, latent_dim)
+
+#         # Decoders
+#         self.decoder_I = vae_Decoder(latent_dim, input_channels, self.skips, img_size)
+#         self.decoder_D = vae_Decoder(latent_dim, 1, self.skips, img_size)
+
+#     def reparameterize(self, mu, logvar):
+#         std = torch.exp(0.5 * logvar)
+#         eps = torch.randn_like(std)
+#         return mu + eps * std
+
+#     def forward(self, x):
+#         batch_size = x.size(0)
+#         self.skips = []  # Reset skip connections
+
+#         # Encoding with skip connections
+#         for i, layer in enumerate(self.encoder):
+#             x = layer(x)
+#             if i in self.skip_layers:
+#                 self.skips.append(x)  # Store intermediate features for skip connections
+
+#         x = F.adaptive_avg_pool2d(x, (1, 1)).view(batch_size, -1)  # 全局池化为 [B, 1024]
+
+#         # Latent variables
+#         mu_I, logvar_I = self.fc_mu1(x), self.fc_logvar1(x)
+#         mu_D, logvar_D = self.fc_mu2(x), self.fc_logvar2(x)
+
+#         z1 = self.reparameterize(mu_I, logvar_I)  # [B, latent_dim]
+#         z2 = self.reparameterize(mu_D, logvar_D)  # [B, latent_dim]
+
+#         # Decoding
+#         I = self.decoder_I(z1)
+#         D = self.decoder_D(z2)
+
+#         return I, D, mu_I, logvar_I, mu_D, logvar_D
+
+
+class vae_Decoder(nn.Module):
+    """
+    The code defines a VAE (Variational Autoencoder) model with a DenseNet161 encoder,
+    skip connections, and two decoders for image generation.
+    
+    :param latent_dim: The `latent_dim` parameter in this code refers to the
+    dimensionality of the latent space representation. It determines the size of the
+    latent vectors that encode the input data in a lower-dimensional space. This parameter
+    is used in various parts of the code, such as defining the size of the latent space,
+    :param output_channels: The `output_channels` parameter refers to the number of
+    channels in the output image generated by the decoder. In the provided code snippet,
+    the `output_channels` parameter is used in the final convolutional layer of the
+    decoder to determine the number of output channels in the generated image
+    :param skip_connections: Skip connections in neural networks are connections that skip
+    one or more layers. They are used to help with the flow of gradients during training
+    and can improve the learning process by providing shortcuts for the gradient to flow
+    through the network
+    :param img_size: The `img_size` parameter represents the size of the image in pixels.
+    In this case, it is a tuple `(480, 640)` indicating the image size of 480 pixels in
+    height and 640 pixels in width
+    """
+    def __init__(self, latent_dim, output_channels, skip_connections, img_size):
+        super(vae_Decoder, self).__init__()
+        self.img_size = img_size
+        self.skip_connections = skip_connections  # Skip connections from the encoder
+        self.fc = nn.Linear(latent_dim, 256 * 4 * 4)  # 增加初始特征图的通道数
+
+        # Decoder with more layers and channels
+        self.deconv_blocks = nn.ModuleList([
+            self._decoder_block(256, 256),  # 8x8
+            self._decoder_block(256, 128),  # 16x16
+            self._decoder_block(128, 128),  # 32x32
+            self._decoder_block(128, 64),  # 64x64
+            self._decoder_block(64, 32),  # 128x128
+        ])
+        
+        # Final convolutional layer
+        self.final_conv = nn.ConvTranspose2d(32, output_channels, kernel_size=3, stride=1, padding=1)
+        self.final_activation = nn.Sigmoid()
+
+    def _decoder_block(self, in_channels, out_channels):
+        """A block with a ConvTranspose2d layer followed by BatchNorm and ReLU."""
+        return nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
-    def forward(self, x):
-        return self.block(x)
+    def forward(self, z):
+        B = z.size(0)
+        z = self.fc(z).view(B, 256, 4, 4)  # Reshape to match decoder input
+
+        # Apply decoder blocks with skip connections
+        for i, deconv_block in enumerate(self.deconv_blocks):
+            z = deconv_block(z)
+            if i < len(self.skip_connections):  # Apply residual connection if available
+                skip = self.skip_connections[-(i + 1)]  # Reverse order of skip connections
+                if skip.size() != z.size():  # Adjust size if necessary
+                    skip = F.interpolate(skip, size=z.size()[2:], mode='bilinear', align_corners=False)
+                z = z + skip  # Residual connection
+
+        # Final output layer
+        z = self.final_conv(z)
+        z = F.interpolate(z, size=self.img_size, mode='bilinear', align_corners=False)
+        return self.final_activation(z)
 
 
-class DepthEstimationDecoder(nn.Module):
-    def __init__(self, input_channels):
-        """
-        :param input_channels: dimension of input channels
-        """
-        super(DepthEstimationDecoder, self).__init__()
+class DenseVAE(nn.Module):
+    def __init__(self, latent_dim, input_channels=3, img_size=(480, 640)):
+        super(DenseVAE, self).__init__()
+        self.latent_dim = latent_dim
 
-        self.decoder = nn.Sequential(
-            nn.Conv2d(input_channels, input_channels, kernel_size=3, stride=1, padding=1),
-            DecoderBlock(input_channels, 512),
-            DecoderBlock(512, 256),
-            DecoderBlock(256, 128),
-            DecoderBlock(128, 64),
-            # Final layer to get the depth map with 1 channel
-            nn.ConvTranspose2d(64, 1, kernel_size=4, stride=2, padding=1)
-        )
+        # Encoder: DenseNet161 (larger model)
+        densenet = densenet161(pretrained=True)
+        self.encoder = nn.Sequential(*list(densenet.features.children()))
+        encoder_output_dim = 2208  # DenseNet161 最终 feature 的通道数
 
-    def forward(self, x, skip_connections):
-        index = len(skip_connections) - 1
-        for layer in self.decoder.children():
-            if index >= 0:
-                x = layer(x) + skip_connections[index]
-                index -= 1
-            else:
-                x = layer(x)
-        return x
+        # Skip connection layers
+        self.skip_layers = [5, 7, 10]  # Select layers for skip connections (example indices)
+        self.skips = []
 
+        # Latent space mappings
+        self.fc_mu1 = nn.Linear(encoder_output_dim, latent_dim)
+        self.fc_logvar1 = nn.Linear(encoder_output_dim, latent_dim)
+        self.fc_mu2 = nn.Linear(encoder_output_dim, latent_dim)
+        self.fc_logvar2 = nn.Linear(encoder_output_dim, latent_dim)
 
-# Define the Deblurring Decoder (AifD)
-class DeblurringDecoder(nn.Module):
-    def __init__(self, input_channels):
-        """
-        :param input_channels: dimension of input channels
-        """
-        super(DeblurringDecoder, self).__init__()
+        # Decoders with increased complexity
+        self.decoder_I = vae_Decoder(latent_dim, input_channels, self.skips, img_size)
+        self.decoder_D = vae_Decoder(latent_dim, 1, self.skips, img_size)
 
-        self.decoder = nn.Sequential(
-            nn.Conv2d(input_channels, input_channels, kernel_size=3, stride=1, padding=1),
-            DecoderBlock(input_channels, 512),
-            DecoderBlock(512, 256),
-            DecoderBlock(256, 128),
-            DecoderBlock(128, 64),
-            # Final layer to get the depth map with 1 channel
-            nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1)
-        )
-
-    def forward(self, x, skip_connections):
-        # x_ini = x.clone()
-        index = len(skip_connections) - 1
-        for layer in self.decoder.children():
-            if index >= 0:
-                x = layer(x) + skip_connections[index]
-                index -= 1
-            else:
-                x = layer(x)
-        return x
-
-
-# Define the complete 2HDED:NET model
-class TwoHeadedDepthDeblurNet(nn.Module):
-    def __init__(self):
-        super(TwoHeadedDepthDeblurNet, self).__init__()
-        # Encoder
-        self.encoder = CustomDenseNetEncoder()
-
-        # Depth Estimation Head (DED)
-        self.depth_head = DepthEstimationDecoder(input_channels=1024)  # Adjust based on encoder output
-
-        # Deblurring Head (AifD)
-        self.deblurring_head = DeblurringDecoder(input_channels=1024)  # Adjust based on encoder output
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
     def forward(self, x):
-        # Encode the input
-        encoded_features = self.encoder(x)
-        x = encoded_features[-1]
+        batch_size = x.size(0)
+        self.skips = []  # Reset skip connections
 
-        # Get depth map from DED
-        depth_map = self.depth_head(x, encoded_features)
+        # Encoding with skip connections
+        for i, layer in enumerate(self.encoder):
+            x = layer(x)
+            if i in self.skip_layers:
+                self.skips.append(x)  # Store intermediate features for skip connections
 
-        # Get deblurred image from AifD
-        deblurred_image = self.deblurring_head(x, encoded_features)
+        x = F.adaptive_avg_pool2d(x, (1, 1)).view(batch_size, -1)  # 全局池化为 [B, 2208]
 
-        return depth_map, deblurred_image
+        # Latent variables
+        mu_I, logvar_I = self.fc_mu1(x), self.fc_logvar1(x)
+        mu_D, logvar_D = self.fc_mu2(x), self.fc_logvar2(x)
+
+        z1 = self.reparameterize(mu_I, logvar_I)  # [B, latent_dim]
+        z2 = self.reparameterize(mu_D, logvar_D)  # [B, latent_dim]
+
+        # Decoding
+        I = self.decoder_I(z1)
+        D = self.decoder_D(z2)
+
+        return I, D, mu_I, logvar_I, mu_D, logvar_D

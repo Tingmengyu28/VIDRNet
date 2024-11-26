@@ -15,20 +15,43 @@ class LitDDNet(pl.LightningModule):
 
         self.generator = GaussPSF(args['k_size'], near=args['depth_min'], far=args['depth_max'], pixel_size=args['pixel_size'], scale=4).cuda()
 
-        if self.args['model_name'] in ['DRNet', 'VIDRNet']:
-            self.dnet = define_G(3, output_nc=[1], tasks=['depth'], model_name=self.args['model_name'])
-            self.rnet = AttResUNet(extra_chn=1, out_chn=3)
+        if self.args['model_name'] in ['VIDRNet']:
+            if self.args['noise_known']:
+                self.dnet = define_G(3, output_nc=[1], tasks=['depth'], model_name=self.args['model_name'])
+                self.rnet = AttResUNet(extra_chn=1, out_chn=3)
+            else:
+                self.mnet = ResNet(3, 3, 8, 16, False)
+                self.dnet = define_G(3, output_nc=[1], tasks=['depth'], model_name=self.args['model_name'])
+                self.rnet = AttResUNet(extra_chn=1, out_chn=3)
         elif self.args['model_name'] in ['2HDEDNet']:
             self.d3net = define_G(3, model_name=self.args['model_name'])
+        elif self.args['model_name'] in ['VAE']:
+            self.vae = DenseVAE(latent_dim=args['latent_dim'])
 
-    def forward(self, x):
-        if self.args['model_name'] in ['2HDEDNet']:
-            depth, aif = self.d3net(x)
-            return depth, aif
-        elif self.args['model_name'] in ['DRNet', 'VIDRNet']:
-            depth = self.dnet(x)
-            aif = self.rnet(x, depth)
-            return depth, aif
+    def forward(self, image):
+        if self.args['noise_known']:
+            if self.args['model_name'] in ['2HDEDNet']:
+                depth, aif = self.d3net(image)
+                
+                return depth, aif
+            elif self.args['model_name'] in ['VIDRNet']:
+                depth = torch.abs(self.dnet(image)[0]) + self.args['depth_min']
+                aif = self.rnet(image, depth)
+                
+                return depth.squeeze(), aif
+            elif self.args['model_name'] in ['VAE']:
+                aif, depth, mu_aif, logvar_aif, mu_depth, logvar_depth = self.vae(image)
+                
+                return aif, depth.squeeze(), mu_aif, logvar_aif, mu_depth, logvar_depth
+        else:
+            assert self.args['model_name'] in ['VIDRNet']
+            noise = self.mnet(image)
+            image = image - noise
+            depth = torch.abs(self.dnet(image)[0]) + self.args['depth_min']
+            aif = self.rnet(image, depth)
+            depth = depth.squeeze()
+            
+            return depth, aif, noise
 
 
     def training_step(self, batch, batch_idx):
@@ -38,31 +61,24 @@ class LitDDNet(pl.LightningModule):
         focal_distance = torch.Tensor([self.args['focal_distance']] * len(batch[0])).float().cuda()
 
         images, betas = self.generator(aif_images, depths, focal_distance, aperture, focal_length)
+        images += torch.randn_like(images) / self.args['alpha'] / 255.0
 
         if self.args['model_name'] == 'VIDRNet':
-            output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
-            output_aif_images = self.rnet(images, output_depths)
-            output_depths = output_depths.squeeze()
+            if self.args['noise_known']:
+                output_depths, output_aif_images = self(images)
+            else:
+                output_depths, output_aif_images, output_noise = self(images)
             output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
 
-            L_depth = kl_inverse_gaussian(depths, output_depths, self.args['alpha'])            
-            # L_depth = kl_inverse_gamma(depths, output_depths, self.args['alpha'])
+            L_depth = l1_norm(depths, output_depths, self.args['alpha'])            
             L_image = mean_square_error(aif_images, output_aif_images, self.args['mu'])
-            L_rec = mean_square_error(output_images, images, self.args['gamma'])
-            L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
+            if self.args['noise_known']:
+                L_rec = mean_square_error(output_images, images, self.args['gamma'])
+            else:
+                weight = (2 * self.args['psi'] + 1) / (torch.pow(output_images - images, 2) + 2 * self.args['phi'])
+                L_rec = mean_square_error(output_images, images, self.args['gamma'] * weight)
+            # L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
 
-            loss = L_depth + L_image + L_rec
-            
-        elif self.args['model_name'] == 'DRNet':
-            output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
-            output_aif_images = self.rnet(images, output_depths)
-            output_depths = output_depths.squeeze()
-            output_images, _ = self.generator(output_aif_images, depths, focal_distance, aperture, focal_length)
-            
-            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu']) + tv_norm(output_depths, self.args['lambda_smooth'])
-            L_image = l1_norm(aif_images, output_aif_images, self.args['alpha']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
-            L_rec = l1_norm(output_images, images, self.args['gamma'])
-            
             loss = L_depth + L_image + L_rec
 
         elif self.args['model_name'] == '2HDEDNet':
@@ -74,7 +90,14 @@ class LitDDNet(pl.LightningModule):
             L_image = CharbonnierLoss(aif_images, output_aif_images) + (1 - cal_ssim(output_aif_images, aif_images)) * 4
             
             loss = L_depth + 0.001 * L_image
+            
+        elif self.args['model_name'] == 'VAE':
+            output_aif_images, output_depths, mu_aif, logvar_aif, mu_depth, logvar_depth = self(images)
+            output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
 
+            loss = vae_loss(images, output_images, aif_images, output_aif_images, depths, output_depths, \
+                            mu_aif, logvar_aif, mu_depth, logvar_depth, self.args['alpha'], self.args['mu']) / self.args['gamma']
+            
         self.log('train_loss', loss, on_step=True)
         return loss
 
@@ -99,14 +122,18 @@ class LitDDNet(pl.LightningModule):
             # output_depths = output_depths.squeeze()
             
         elif self.args['model_name'] == 'VIDRNet':
-            output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
-            output_aif_images = self.rnet(images, output_depths)
-            output_depths = output_depths.squeeze()
+            if self.args['noise_known']:
+                output_depths, output_aif_images = self(images)
+            else:
+                output_depths, output_aif_images, output_noise = self(images)
+                
+        elif self.args['model_name'] == 'VAE':
+            output_aif_images, output_depths, mu_aif, logvar_aif, mu_depth, logvar_depth = self(images)
 
         rmse_depth = self.args['depth_max'] * torch.sqrt(mean_square_error(depths, output_depths))
-        ssim_image = cal_ssim(output_aif_images, aif_images)
-        AbsRel, delta1, delta2, delta3 = cal_AbsRel(depths, output_depths), cal_delta(depths, output_depths, 1), cal_delta(depths, output_depths, 2), cal_delta(depths, output_depths, 3)
-        self.log('focal_distance', round(self.args['focal_distance'], 3))
+        ssim_image = cal_ssim(aif_images, output_aif_images)
+        AbsRel = cal_AbsRel(depths, output_depths)
+        delta1, delta2, delta3 = cal_delta(depths, output_depths, 1), cal_delta(depths, output_depths, 2), cal_delta(depths, output_depths, 3)
         self.log('test_rmse_depth', rmse_depth.round(decimals=4))
         self.log('test_ssim_aif', ssim_image.round(decimals=4))
         self.log('test_AbsRel', AbsRel.round(decimals=4))
@@ -123,31 +150,24 @@ class LitDDNet(pl.LightningModule):
         focal_distance = torch.Tensor([self.args['focal_distance']] * len(batch[0])).float().cuda()
 
         images, betas = self.generator(aif_images, depths, focal_distance, aperture, focal_length)
+        images += torch.randn_like(images) / self.args['alpha'] / 255.0
 
         if self.args['model_name'] == 'VIDRNet':
-            output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
-            output_aif_images = self.rnet(images, output_depths)
-            output_depths = output_depths.squeeze()
+            if self.args['noise_known']:
+                output_depths, output_aif_images = self(images)
+            else:
+                output_depths, output_aif_images, output_noise = self(images)
             output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
 
-            L_depth = kl_inverse_gaussian(depths, output_depths, self.args['alpha'])            
-            # L_depth = kl_inverse_gamma(depths, output_depths, self.args['alpha'])
+            L_depth = l1_norm(depths, output_depths, self.args['alpha'])            
             L_image = mean_square_error(aif_images, output_aif_images, self.args['mu'])
-            L_rec = mean_square_error(output_images, images, self.args['gamma'])
-            L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
+            if self.args['noise_known']:
+                L_rec = mean_square_error(output_images, images, self.args['gamma'])
+            else:
+                weight = (2 * self.args['psi'] + 1) / (torch.pow(output_images - images, 2) + 2 * self.args['phi'])
+                L_rec = mean_square_error(output_images, images, self.args['gamma'] * weight)
+            # L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
 
-            loss = L_depth + L_image + L_rec
-            
-        elif self.args['model_name'] == 'DRNet':
-            output_depths = torch.abs(self.dnet(images)[0]) + self.args['depth_min']
-            output_aif_images = self.rnet(images, output_depths)
-            output_depths = output_depths.squeeze()
-            output_images, _ = self.generator(output_aif_images, depths, focal_distance, aperture, focal_length)
-            
-            L_depth = kl_inverse_gamma(depths, output_depths, self.args['mu']) + tv_norm(output_depths, self.args['lambda_smooth'])
-            L_image = l1_norm(aif_images, output_aif_images, self.args['alpha']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim']
-            L_rec = l1_norm(output_images, images, self.args['gamma'])
-            
             loss = L_depth + L_image + L_rec
             
         elif self.args['model_name'] == '2HDEDNet':
@@ -159,12 +179,19 @@ class LitDDNet(pl.LightningModule):
             L_image = CharbonnierLoss(aif_images, output_aif_images) + (1 - cal_ssim(output_aif_images, aif_images)) * 4
 
             loss = L_depth + 0.001 * L_image
+            
+        elif self.args['model_name'] == 'VAE':
+            output_aif_images, output_depths, mu_aif, logvar_aif, mu_depth, logvar_depth = self(images)
+            output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
+
+            loss = vae_loss(images, output_images, aif_images, output_aif_images, depths, output_depths, \
+                            mu_aif, logvar_aif, mu_depth, logvar_depth, self.args['alpha'], self.args['mu']) / self.args['gamma']
 
         self.log('val_loss', loss)
         self.log('val_rmse_depth', self.args['depth_max'] * torch.sqrt(mean_square_error(output_depths, depths)))
         self.log('val_AbsRel', cal_AbsRel(depths, output_depths))
         self.log('val_ssim_image', cal_ssim(aif_images, output_aif_images))
 
-        if batch_idx == 8 and self.args['model_name'] in ['VIDRNet', 'DRNet', '2HDEDNet']:
+        if batch_idx == 8 and self.args['model_name'] in ['VIDRNet', '2HDEDNet', 'VAE']:
             visualize_sample(images[0], output_images[0], aif_images[0], output_aif_images[0], depths[0], output_depths[0], self.logger, self.global_step)
         return loss
