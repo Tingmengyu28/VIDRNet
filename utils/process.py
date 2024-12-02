@@ -58,7 +58,7 @@ class LitDDNet(pl.LightningModule):
     def _kl_divergence_depth(self):
         if self.args['prior_depth'] == 'gaussian':
             kl_depth = mean_square_error
-        elif self.args['prior_depth'] == 'laplacian':
+        elif self.args['prior_depth'] == 'laplace':
             kl_depth = l1_norm
         elif self.args['prior_depth'] == 'gamma':
             kl_depth = kl_inverse_gamma
@@ -68,7 +68,7 @@ class LitDDNet(pl.LightningModule):
     def reparameterlize_depth(self, depths):
         if self.args['prior_depth'] == 'gaussian':
             depths_sample = depths + torch.randn_like(depths) / self.args['alpha']
-        elif self.args['prior_depth'] == 'laplacian':
+        elif self.args['prior_depth'] == 'laplace':
             depths_sample = tdist.laplace.Laplace(depths, 1 / self.args['alpha']).rsample()
         elif self.args['prior_depth'] == 'gamma':
             depths_sample = tdist.gamma.Gamma(self.args['alpha'] + 1, self.args['alpha'] / depths).rsample()

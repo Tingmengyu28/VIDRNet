@@ -3,7 +3,7 @@
     "model_name": "VIDRNet",
     "noise_known": true,
     "noise_iid": false,
-    "prior_depth": "gamma",
+    "prior_depth": "laplace",
     "latent_dim": 128,
     "batch_size": 8,
     "max_epochs": 300,
