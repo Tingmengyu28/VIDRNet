@@ -64,16 +64,22 @@ class LitDDNet(pl.LightningModule):
             kl_depth = kl_inverse_gamma
             
         return kl_depth
-
-    def reparameter_gamma(self, alpha, beta):
-        dist_gamma = tdist.gamma.Gamma(alpha, beta)
-        return dist_gamma.rsample()
+    
+    def reparameterlize_depth(self, depths):
+        if self.args['prior_depth'] == 'gaussian':
+            depths_sample = depths + torch.randn_like(depths) / self.args['alpha']
+        elif self.args['prior_depth'] == 'laplacian':
+            depths_sample = tdist.laplace.Laplace(depths, 1 / self.args['alpha']).rsample()
+        elif self.args['prior_depth'] == 'gamma':
+            depths_sample = tdist.gamma.Gamma(self.args['alpha'] + 1, self.args['alpha'] / depths).rsample()
+        
+        return depths_sample
 
     def _vidrnet_loss(self, depths, aif_images, images, focal_distance, aperture, focal_length):
         output_depths, output_aif_images = self(images)
         # reparameterization trick
         output_aif_images_sample = output_aif_images + torch.randn_like(output_aif_images) / self.args['mu'] / 255.0
-        output_depths_sample = self.reparameter_gamma(self.args['alpha'] + 1, self.args['alpha'] / output_depths)
+        output_depths_sample = self.reparameterlize_depth(output_depths)
         output_images, _ = self.generator(output_aif_images_sample, output_depths_sample, focal_distance, aperture, focal_length)
         L_depth = self._kl_divergence_depth()(depths, output_depths, self.args['alpha'])
         L_image = mean_square_error(aif_images, output_aif_images, self.args['mu'])
