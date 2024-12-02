@@ -21,9 +21,17 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 if __name__ == "__main__":
     with open("configs.json", "r") as f:
         args = json.load(f)
-    ckpt_name = f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
-    save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts", ckpt_name)
-
+    ckpt_name = f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
+    if args['noise_known']:
+        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_known", ckpt_name)
+        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_known", ckpt_name)
+    elif args['noise_iid']:
+        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_iid", ckpt_name)
+        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_iid", ckpt_name)
+    else:
+        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_free", ckpt_name)
+        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_free", ckpt_name)
+        
     if args['dataset'] == "nyuv2":
         args['depth_max'] = 10.0
         args['f_number'] = 2.8
@@ -36,7 +44,6 @@ if __name__ == "__main__":
         args['batch_size'] = 16
         data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
 
-    logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs", ckpt_name)
     checkpoint_callback = ModelCheckpoint(dirpath=save_path,
                                           monitor="val_loss",
                                           save_last=True,

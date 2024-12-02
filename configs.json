@@ -2,8 +2,10 @@
     "dataset": "nyuv2",
     "model_name": "VIDRNet",
     "noise_known": true,
+    "noise_iid": false,
+    "prior_depth": "gamma",
     "latent_dim": 128,
-    "batch_size": 16,
+    "batch_size": 8,
     "max_epochs": 300,
     "val_ratio": 0.45,
     "test_ratio": 0,
@@ -11,7 +13,7 @@
     "min_learning_rate": 1e-8,
     "num_workers": 4,
     "devices": [
-        4
+        5
     ],
     "precision": "32",
     "eps2": 0.01,
@@ -31,7 +33,7 @@
     "gamma": 1,
     "lambda_smooth": 0.1,
     "lambda_ssim": 0.4,
-    "phi": 0.1,
-    "psi": 0.1,
+    "phi": 10,
+    "psi": 10,
     "load_path": "outputs/nyuv2/ckpts/VIDRNet0.2:alpha10_mu0.1_gamma1:2024-11-24-11-41-49/epoch=229-step=23000.ckpt"
 }

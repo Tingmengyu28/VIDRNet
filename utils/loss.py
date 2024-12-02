@@ -28,14 +28,11 @@ def vae_loss(J_true, J_pred, I_true, I_pred, D_true, D_pred, mu1, logvar1, mu2, 
 
     # KL divergence for z1
     kl_loss1 = -0.5 * torch.mean(1 + logvar1 - mu1.pow(2) - logvar1.exp())
-    
+
     # KL divergence for z2
     kl_loss2 = -0.5 * torch.mean(1 + logvar2 - mu2.pow(2) - logvar2.exp())
 
-    # Weighted total loss
-    total_loss = alpha * (recon_loss + I_loss + D_loss) + beta * (kl_loss1 + kl_loss2)
-
-    return total_loss
+    return alpha * (recon_loss + I_loss + D_loss) + beta * (kl_loss1 + kl_loss2)
 
 
 def mean_square_error(images, pred_images, weight=1):
@@ -63,16 +60,12 @@ def cross_entropy(D_gt_bi, D_est_bi, weight=1):
 
 def distance_entropy(D_est_bi, D_gt, D_focal, lambda1):
     D_gt_bi = torch.where(D_gt >= D_focal, 1.0, 0.0).unsqueeze(1)
-    entropy_D = cross_entropy(D_gt_bi, D_est_bi, lambda1)
-
-    return entropy_D
+    return cross_entropy(D_gt_bi, D_est_bi, lambda1)
 
 def distance_mse(D_est_bi, D_gt, beta_est, D_focal, k_cam):
     D_est = depth_tranformer(D_est_bi, beta_est, D_focal, k_cam)
     D_gt = D_gt.unsqueeze(1)
-    rmse_D = nn.MSELoss()(D_est, D_gt)
-
-    return rmse_D
+    return nn.MSELoss()(D_est, D_gt)
 
 def depth_tranformer(D_est_bi, beta_est, D_focal, k_cam):
     D_est = torch.zeros_like(D_est_bi, requires_grad=False, dtype=D_est_bi.dtype, device=D_est_bi.device)
@@ -97,9 +90,9 @@ def _ssim(img1, img2, window, window_size, channel):
     C1 = 0.01 ** 2
     C2 = 0.03 ** 2
 
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-
-    return ssim_map
+    return ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+    )
 
 
 def gaussian(window_size, sigma):
