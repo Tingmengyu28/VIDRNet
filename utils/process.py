@@ -92,8 +92,10 @@ class LitDDNet(pl.LightningModule):
         else:
             weight = (2 * self.args['psi'] + 1) / (torch.pow(output_images - images, 2) + 2 * self.args['phi'])
             L_rec = mean_square_error(output_images, images, self.args['gamma'] * weight)
+        
+        L_additional = tv_norm(output_depths, self.args['lambda_smooth']) + (1 - cal_ssim(output_aif_images, aif_images)) * self.args['lambda_ssim'] if self.args['additional_prior'] else 0
 
-        return {'loss': L_depth + L_image + L_rec,
+        return {'loss': L_depth + L_image + L_rec + L_additional,
                 'output_depths': output_depths,
                 'output_aif_images': output_aif_images,
                 'output_images': output_images}

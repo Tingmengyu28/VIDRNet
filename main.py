@@ -21,7 +21,8 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 if __name__ == "__main__":
     with open("configs.json", "r") as f:
         args = json.load(f)
-    ckpt_name = f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
+    ckpt_name = f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['additional_prior'] is False else \
+                f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}_additional:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     if args['noise_known']:
         save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_known", ckpt_name)
         logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_known", ckpt_name)
