@@ -40,8 +40,18 @@ def mean_square_error(images, pred_images, weight=1):
 
     return  torch.mean(out)
 
+def mse_mask(images, pred_images, mask, weight=1):
+    out = nn.MSELoss()(images[mask] * weight, pred_images[mask] * weight)
+    
+    return  torch.mean(out)
+
 def l1_norm(images, pred_images, weight=1):
     out = nn.L1Loss()(images, pred_images)
+
+    return  torch.mean(out) * weight
+
+def l1_norm_mask(images, pred_images, mask, weight=1):
+    out = nn.L1Loss()(images[mask], pred_images[mask])
 
     return  torch.mean(out) * weight
 
@@ -52,27 +62,6 @@ def kl_inverse_gamma(depths, pred_depths, weight=1):
 def kl_inverse_gaussian(depths, pred_depths, weight=1):
     
     return weight * torch.mean((depths - pred_depths) ** 2 / (depths ** 2 * pred_depths))
-
-def cross_entropy(D_gt_bi, D_est_bi, weight=1):
-    out = nn.BCEWithLogitsLoss()(D_est_bi, D_gt_bi.squeeze())
-
-    return torch.mean(out) * weight
-
-def distance_entropy(D_est_bi, D_gt, D_focal, lambda1):
-    D_gt_bi = torch.where(D_gt >= D_focal, 1.0, 0.0).unsqueeze(1)
-    return cross_entropy(D_gt_bi, D_est_bi, lambda1)
-
-def distance_mse(D_est_bi, D_gt, beta_est, D_focal, k_cam):
-    D_est = depth_tranformer(D_est_bi, beta_est, D_focal, k_cam)
-    D_gt = D_gt.unsqueeze(1)
-    return nn.MSELoss()(D_est, D_gt)
-
-def depth_tranformer(D_est_bi, beta_est, D_focal, k_cam):
-    D_est = torch.zeros_like(D_est_bi, requires_grad=False, dtype=D_est_bi.dtype, device=D_est_bi.device)
-    D_est[D_est_bi >= 0] = D_focal * k_cam / (k_cam - beta_est[D_est_bi >= 0])
-    D_est[D_est_bi < 0] = D_focal * k_cam / (k_cam + beta_est[D_est_bi < 0])
-
-    return D_est
 
 
 def _ssim(img1, img2, window, window_size, channel):
@@ -137,13 +126,13 @@ def cal_ssim(images, pred_images, weight=1):
     return torch.mean(out) * weight
 
 
-def tv_norm(image, weight=1):
+def total_variation(image, p=1, weight=1):
     if len(image.shape) == 4:
-        diff_i = torch.abs(image[:, :, :, 1:] - image[:, :, :, :-1])
-        diff_j = torch.abs(image[:, :, 1:, :] - image[:, :, :-1, :])
+        diff_i = torch.pow((torch.abs(image[:, :, :, 1:] - image[:, :, :, :-1])), p)
+        diff_j = torch.pow((torch.abs(image[:, :, 1:, :] - image[:, :, :-1, :])), p)
     elif len(image.shape) == 3:
-        diff_i = torch.abs(image[:, :, 1:] - image[:, :, :-1])
-        diff_j = torch.abs(image[:, 1:, :] - image[:, :-1, :])
+        diff_i = torch.pow(torch.abs(image[:, :, 1:] - image[:, :, :-1]), p)
+        diff_j = torch.pow(torch.abs(image[:, 1:, :] - image[:, :-1, :]), p)
 
     tv_norm = torch.mean(diff_i) + torch.mean(diff_j)
     return weight * tv_norm

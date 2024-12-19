@@ -4,7 +4,7 @@ import time
 import os
 import json
 import pytorch_lightning as pl
-from utils.datasets import NYUDepthDataModule, NYUDepthDataModule_v2, Make3DDataModule
+from utils.datasets import NYUDepthDataModule, Make3DDataModule
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from utils.process import LitDDNet
@@ -21,28 +21,25 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 if __name__ == "__main__":
     with open("configs.json", "r") as f:
         args = json.load(f)
-    ckpt_name = f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['additional_prior'] is False else \
-                f"{args['model_name']}{args['focal_distance']}:alpha{args['alpha']}_mu{args['mu']}_gamma{args['gamma']}_D_{args['prior_depth']}_additional:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
-    if args['noise_known']:
-        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_known", ckpt_name)
-        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_known", ckpt_name)
-    elif args['noise_iid']:
-        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_iid", ckpt_name)
-        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_iid", ckpt_name)
+
+    if args['model_name'] == 'VDRNet':
+        ckpt_name = f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']}):a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['smoothness'] is False else \
+                    f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']})-smooth:a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     else:
-        save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts/noise_free", ckpt_name)
-        logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs/noise_free", ckpt_name)
-        
+        ckpt_name = f"{args['model_name']}{args['focal_distance']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
+    save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts", ckpt_name)
+    logger = TensorBoardLogger(f"outputs/{args['dataset']}/logs", ckpt_name)
+    
+    args['depth_min'] = 1e-3
     if args['dataset'] == "nyuv2":
         args['depth_max'] = 10.0
-        args['f_number'] = 2.8
         args['image_size'] = (480, 640)
         data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
         # data_module = NYUDepthDataModule_v2(args=args, batch_size=args['batch_size'])
     elif args['dataset'] == "make3d":
         args['depth_max'] = 80.0
-        args['f_number'] = 1
         args['batch_size'] = 16
+        args['image_size'] = (320, 480)
         data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
 
     checkpoint_callback = ModelCheckpoint(dirpath=save_path,

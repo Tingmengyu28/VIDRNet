@@ -120,8 +120,8 @@ class Make3DDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
 
     def setup(self, stage=None):
-        self.train_dataset = Make3DDataset("data/make3d/Train400Depth", "data/make3d/Train400Img", self.image_size, self.args)
-        self.val_dataset = Make3DDataset("data/make3d/Test134Depth", "data/make3d/Test134Img", self.image_size, self.args)
+        self.train_dataset = Make3DDataset("data/make3d/Train400Depth", "data/make3d/Train400Image", self.image_size, self.args)
+        self.val_dataset = Make3DDataset("data/make3d/Test134Depth", "data/make3d/Test134Image", self.image_size, self.args)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.args['num_workers'])

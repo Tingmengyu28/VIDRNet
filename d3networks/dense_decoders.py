@@ -11,7 +11,7 @@ import re
 from ipdb import set_trace as st
 
 from .conv_blocks import get_decoder_block, conv3x3, conv4x4, UpsampleBlock, BasicBlock
-import d3networks.weight_initialization as w_init
+import networks.d3networks.weight_initialization as w_init
 
 __all__ = ['DenseNet', 'densenet121', 'densenet169', 'densenet201', 'densenet161']
 

@@ -40,10 +40,10 @@ def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', v
     """
 
     d_block = BasicBlock
-    if model_name in ['VIDRNet']:
+    if model_name in ['VDRNet', 'D3Net']:
         model = DenseUNet_v2(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
                             **kwargs)
-    elif model_name == '2HDEDNet':
+    else:
         model = DenseUNet_aif(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
                             **kwargs)
 
@@ -804,7 +804,7 @@ class DenseUNet_aif(nn.Module):
         # print(aif_pred.size())
         # print(output.size())
         
-        return output, aif_pred
+        return output[0], aif_pred
 
   
     def get_last_common_layer(self):
