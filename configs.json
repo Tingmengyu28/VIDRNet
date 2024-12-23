@@ -1,5 +1,5 @@
 {
-    "dataset": "make3d",
+    "dataset": "nyuv2",
     "model_name": "VDRNet",
     "smoothness": true,
     "prior_depth": "gaussian",
@@ -10,11 +10,11 @@
     "precision": "32",
     "num_workers": 4,
     "devices": [
-        2
+        5
     ],
 
     "focal_length": 35e-3,
-    "f_number": 1.4,
+    "f_number": 2.8,
     "pixel_size": 56e-7,
     "save_epoch": 10,
     "k_size": 7,
@@ -22,10 +22,10 @@
     "focal_distance": 0.2,
 
     "alpha": 10,
-    "mu": 10,
+    "mu": 1,
     "gamma": 1,
     "lambda_d": 0.1,
-    "lambda_z": 1,
+    "lambda_z": 0.0,
 
     "load_path": "outputs/nyuv2/ckpts/VDRNet0.2-D(gaussian)-add:a10-m1-g1:2024-12-13-17-45-47/epoch=299-step=30000.ckpt"
 }

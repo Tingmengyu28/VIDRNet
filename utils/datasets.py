@@ -5,6 +5,7 @@ import os
 import h5py
 import cv2
 import pytorch_lightning as pl
+from path import Path
 from scipy.io import loadmat
 from torch.utils.data import DataLoader, Dataset
 from scipy import io
@@ -86,7 +87,7 @@ class Make3DDataset(Dataset):
         self.args = args
         self.depth_paths = depth_paths
         self.image_paths = image_paths
-        self.image_size = image_size or (480, 320)
+        self.image_size = image_size
         self.depth_files = sorted([f for f in os.listdir(self.depth_paths) if f.endswith('.mat')], key=lambda p: p.split('/')[-1].split('depth_sph_corr-')[-1])
         self.image_files = sorted([f for f in os.listdir(self.image_paths) if f.endswith('.jpg')], key=lambda p: p.split('/')[-1].split('img-')[-1])
         assert len(self.depth_files) == len(self.image_files), "The number of .mat and .jpg files should be the same."
@@ -133,63 +134,46 @@ class Make3DDataModule(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
 
 
-class NYUDepthDataset_v2(Dataset):
-    def __init__(self, args, all_image_id, transform):
+class KITTIDataset(Dataset):
+    def __init__(self, args, list_file='train.txt', transform=None, scale=1):
+        super(KITTIDataset, self).__init__()
         self.args = args
-        self.transform = transform
-        defocused_path = f"nyu2_data/blurred_n2"
-        self.all_image_paths = [
-            f"{defocused_path}/{image_id}.jpg"
-            for image_id in all_image_id
-        ]
-        self.all_depth_paths = [
-            f"nyu2_data/depth/{depth_id_path}.jpg"
-            for depth_id_path in all_image_id
-        ]
-        self.all_aif_image_paths = [
-            f"nyu2_data/clean/{image_id}.jpg"
-            for image_id in all_image_id
-        ]
+        self.root = Path("/home/cxhpc/data/azt/research/CV/Defocus/data/kitti/reformed")
+        scene_list_path = self.root/list_file
+        self.scenes = [self.root/folder[:-1] for folder in open(scene_list_path)]
+        self.scale = scale
+        self.transform = transform or transforms.ToTensor()
+        self.gt_depth = []
+        self.org = []
+
+        for scene in self.scenes:
+            imgs = sorted(scene.files('*.jpg'))
+            depths = sorted(scene.files('*.npy'))
+            self.org += imgs
+            self.gt_depth += depths
+
+        assert len(self.gt_depth) == len(self.org)
+
+    def __getitem__(self, idx):
+
+        img_gt_depth = np.load(self.gt_depth[idx])
+        img_org = cv2.imread(self.org[idx])
+        H, W, _ = img_org.shape
+
+        if self.scale > 1:
+            img_gt_depth = cv2.resize(img_gt_depth, (W // self.scale, H // self.scale))
+            img_org = cv2.resize(img_org, (W // self.scale, H // self.scale))
+
+        if self.transform is not None:
+            img_org, img_gt_depth = self.transform(img_org, img_gt_depth)
+
+        img_org = torch.from_numpy(img_org).permute(2, 0, 1).float() / 255
+        img_gt_depth = torch.from_numpy(img_gt_depth).float() / self.args['depth_max']
         
+        img_gt_depth.requires_grad = False
+        img_org.requires_grad = False
+
+        return img_gt_depth, img_org
+
     def __len__(self):
-        return len(self.all_image_paths)
-
-    def __getitem__(self, index):
-        
-        img = cv2.imread(self.all_image_paths[index], cv2.IMREAD_COLOR)
-        img = self.transform(img)
-        aif_img = cv2.imread(self.all_image_paths[index], cv2.IMREAD_COLOR)
-        aif_img = self.transform(aif_img)
-        depth = cv2.imread(self.all_depth_paths[index], cv2.IMREAD_GRAYSCALE)
-        depth = torch.from_numpy(depth) / 10 / self.args['depth_max']
-
-        return img, aif_img, depth
-
-
-class NYUDepthDataModule_v2(pl.LightningDataModule):
-    def __init__(self, args, batch_size=16):
-        super().__init__()
-        self.args = args
-        self.batch_size = batch_size
-        self.transform = transforms.ToTensor()
-
-    def prepare_data(self):
-        pass
-
-    def setup(self, stage=None):
-        
-        splits = io.loadmat('data/nyu_depth/splits.mat')
-        train_idx = np.array(splits['trainNdxs']).squeeze(-1)
-        test_idx = np.array(splits['testNdxs']).squeeze(-1)
-        
-        self.train_loader = NYUDepthDataset_v2(self.args, train_idx, self.transform)
-        self.val_loader = NYUDepthDataset_v2(self.args, test_idx, self.transform)
-
-    def train_dataloader(self):
-        return DataLoader(self.train_loader, batch_size=self.batch_size, shuffle=True, num_workers=self.args['num_workers'])
-
-    def val_dataloader(self):
-        return DataLoader(self.val_loader, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
-
-    def test_dataloader(self):
-        return DataLoader(self.val_loader, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
+        return len(self.org)
