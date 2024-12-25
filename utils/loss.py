@@ -4,64 +4,16 @@ import torch.nn.functional as F
 from math import exp
 
 
-def vae_loss(J_true, J_pred, I_true, I_pred, D_true, D_pred, mu1, logvar1, mu2, logvar2, alpha=1.0, beta=1.0):
-    """
-    Loss function for VAE with weighted reconstruction and KL divergence losses.
-
-    Args:
-    J_true (torch.Tensor): Ground truth input images, shape [B, 3, H, W].
-    J_pred (torch.Tensor): Predicted images, shape [B, 3, H, W].
-    mu1 (torch.Tensor): Mean of z1, shape [B, latent_dim].
-    logvar1 (torch.Tensor): Log variance of z1, shape [B, latent_dim].
-    mu2 (torch.Tensor): Mean of z2, shape [B, latent_dim].
-    logvar2 (torch.Tensor): Log variance of z2, shape [B, latent_dim].
-    alpha (float): Weight for the reconstruction loss term.
-    beta (float): Weight for the KL divergence term.
-
-    Returns:
-    torch.Tensor: Combined loss value (scalar).
-    """
-    # Reconstruction loss (e.g., MSE loss)
-    recon_loss = F.mse_loss(J_pred, J_true, reduction='mean')  # Sum over all elements
-    I_loss = F.mse_loss(I_true, I_pred, reduction='mean')
-    D_loss = F.mse_loss(D_true, D_pred, reduction='mean')
-
-    # KL divergence for z1
-    kl_loss1 = -0.5 * torch.mean(1 + logvar1 - mu1.pow(2) - logvar1.exp())
-
-    # KL divergence for z2
-    kl_loss2 = -0.5 * torch.mean(1 + logvar2 - mu2.pow(2) - logvar2.exp())
-
-    return alpha * (recon_loss + I_loss + D_loss) + beta * (kl_loss1 + kl_loss2)
-
-
 def mean_square_error(images, pred_images, weight=1):
     out = nn.MSELoss()(images * weight, pred_images * weight)
 
     return  torch.mean(out)
 
-def mse_mask(images, pred_images, mask, weight=1):
-    out = nn.MSELoss()(images[mask] * weight, pred_images[mask] * weight)
-    
-    return  torch.mean(out)
 
 def l1_norm(images, pred_images, weight=1):
     out = nn.L1Loss()(images, pred_images)
 
     return  torch.mean(out) * weight
-
-def l1_norm_mask(images, pred_images, mask, weight=1):
-    out = nn.L1Loss()(images[mask], pred_images[mask])
-
-    return  torch.mean(out) * weight
-
-def kl_inverse_gamma(depths, pred_depths, weight=1):
-    
-    return weight * torch.mean(pred_depths / depths + torch.log(depths) - torch.log(pred_depths) - 1)
-
-def kl_inverse_gaussian(depths, pred_depths, weight=1):
-    
-    return weight * torch.mean((depths - pred_depths) ** 2 / (depths ** 2 * pred_depths))
 
 
 def _ssim(img1, img2, window, window_size, channel):
@@ -161,3 +113,15 @@ def cal_delta(depths, output_depths, p):
     delta_bi = torch.zeros_like(delta, requires_grad=False, device=delta.device)
     delta_bi[delta < threshold] = 1
     return torch.mean(delta_bi)
+
+
+def log_mse_torch(depths, output_depths):
+    
+    # 确保输入是非零的以避免对数操作报错
+    predicted_depth = torch.clamp(output_depths, min=1e-6)
+    ground_truth_depth = torch.clamp(depths, min=1e-6)
+
+    # 计算对数差
+    log_diff = torch.log(predicted_depth) - torch.log(ground_truth_depth)
+
+    return torch.mean(log_diff ** 2)

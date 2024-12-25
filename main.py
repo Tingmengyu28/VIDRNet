@@ -19,12 +19,17 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 
 
 if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser(description='Depth estimation')
+    parser.add_argument('--mode', type=str, default='train', help='train or test or resume')
+    pas = parser.parse_args()
+    
     with open("configs.json", "r") as f:
         args = json.load(f)
 
     if args['model_name'] == 'VDRNet':
-        ckpt_name = f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']}):a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['smoothness'] is False else \
-                    f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']})-smooth:a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
+        ckpt_name = f"{args['model_name']}{args['focal_distance']}(small)-D({args['prior_depth']}):a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['smoothness'] is False else \
+                    f"{args['model_name']}{args['focal_distance']}(small)-D({args['prior_depth']})-smooth:a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     else:
         ckpt_name = f"{args['model_name']}{args['focal_distance']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts", ckpt_name)
@@ -35,12 +40,18 @@ if __name__ == "__main__":
         args['depth_max'] = 10.0
         args['f_number'] = 2.8
         args['image_size'] = (480, 640)
-        data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
-        # data_module = NYUDepthDataModule_v2(args=args, batch_size=args['batch_size'])
+        if pas.mode == 'train':
+            data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
+        else:
+            data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=1)
+            
     elif args['dataset'] == "make3d":
         args['depth_max'] = 80.0
         args['image_size'] = (320, 480)
-        data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
+        if pas.mode == 'train':
+            data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
+        else:
+            data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=1)
 
     checkpoint_callback = ModelCheckpoint(dirpath=save_path,
                                           monitor="val_loss",
@@ -58,10 +69,6 @@ if __name__ == "__main__":
         log_every_n_steps=5,
         callbacks=[checkpoint_callback, lr_monitor, PrintAccuracyAndLossCallback()],
     )
-
-    parser = argparse.ArgumentParser(description='Depth estimation')
-    parser.add_argument('--mode', type=str, default='train', help='train or test or resume')
-    pas = parser.parse_args()
 
     model = LitDDNet(args=args)
     if pas.mode == 'train':

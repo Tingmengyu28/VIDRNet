@@ -3,14 +3,14 @@
     "model_name": "VDRNet",
     "smoothness": true,
     "prior_depth": "gaussian",
-    "batch_size": 8,
+    "batch_size": 4,
     "max_epochs": 300,
     "learning_rate": 1e-4,
     "min_learning_rate": 1e-8,
     "precision": "32",
     "num_workers": 4,
     "devices": [
-        5
+        5, 6
     ],
 
     "focal_length": 35e-3,
@@ -23,9 +23,9 @@
 
     "alpha": 10,
     "mu": 1,
-    "gamma": 1,
+    "gamma": 0.1,
     "lambda_d": 0.1,
     "lambda_z": 0.0,
 
-    "load_path": "outputs/nyuv2/ckpts/VDRNet0.2-D(gaussian)-add:a10-m1-g1:2024-12-13-17-45-47/epoch=299-step=30000.ckpt"
+    "load_path": "outputs/make3d/ckpts/VDRNet0.2(small)-D(gaussian)-smooth:a10-m10-g1:2024-12-25-02-11-21/epoch=189-step=9500.ckpt"
 }

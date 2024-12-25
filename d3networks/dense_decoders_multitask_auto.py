@@ -43,7 +43,7 @@ def denseUnet121(pretrained=False, d_block_type='basic', init_method='normal', v
     if model_name in ['VDRNet', 'D3Net']:
         model = DenseUNet_v2(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
                             **kwargs)
-    else:
+    elif model_name in ['2HDEDNet']:
         model = DenseUNet_aif(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), d_block=d_block,
                             **kwargs)
 
@@ -761,7 +761,7 @@ class DenseUNet_aif(nn.Module):
         out_d3 = self.decoder.d_block3(self.get_decoder_input(tb_denseblock2, out))
         # print("3rd decoder layer: {}".format(out.shape))
         
-        self.last_common_layer = self.decoder.d_block3
+        # self.last_common_layer = self.decoder.d_block3
         
         output = []
         
@@ -807,5 +807,5 @@ class DenseUNet_aif(nn.Module):
         return output[0], aif_pred
 
   
-    def get_last_common_layer(self):
-        return self.last_common_layer
+    # def get_last_common_layer(self):
+    #     return self.last_common_layer

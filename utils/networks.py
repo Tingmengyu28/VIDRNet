@@ -154,7 +154,8 @@ class AttResUNet(nn.Module):
                  extra_chn=1,
                  out_chn=1,
                  n_resblocks=2,
-                 n_feat=[64, 128, 256, 512],
+                #  n_feat=[64, 128, 256, 512],
+                 n_feat=[64, 128, 196, 256],
                  extra_mode='Input'):
         """
         Args:
@@ -208,7 +209,7 @@ class AttResUNet(nn.Module):
         '''
         h, w = x_in.shape[-2:]
         x = pad_input(x_in, 2**(self.depth-1))
-        if not self.extra_mode == 'null':
+        if self.extra_mode != 'null':
             extra_maps = pad_input(extra_maps_in, 2**(self.depth-1))
 
         if self.extra_mode in ['input', 'both']:
