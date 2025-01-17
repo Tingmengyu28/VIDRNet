@@ -1,6 +1,5 @@
 import torch.optim as optim
 import pytorch_lightning as pl
-import torch.distributions as tdist
 from torcheval.metrics import PeakSignalNoiseRatio
 from torchvision.utils import save_image
 from draw_depth import save_depth_as_image
@@ -16,17 +15,15 @@ class LitDDNet(pl.LightningModule):
         self.save_hyperparameters()
         self.args = args
         self.generator = GaussPSF(args['k_size'], near=args['depth_min'], far=args['depth_max'], pixel_size=args['pixel_size'], scale=4).cuda()
+        self.val_outputs = []
         self.outputs = []
         if self.args['dataset'] == 'make3d':
             self.outputs_c1 = []
 
         if self.args['model_name'] == 'VDRNet':
+            # self.net = define_G(3, output_nc=[1, 3], tasks=['depth', 'reconstruction'], pretrained=True, model_name=self.args['model_name'])
             self.dnet = define_G(3, output_nc=[1], tasks=['depth'], pretrained=True, model_name=self.args['model_name'])
-            # Recommand 'Input' for NYU dataset, 'Both' for Make3D dataset
-            # if self.args['dataset'] == 'nyuv2':
-            #     extra_mode = 'Input'
-            # elif self.args['dataset'] == 'make3d':
-            #     extra_mode = 'Both'
+            # self.dnet = DepthEstimationNet(base_channels=64, num_blocks=4)
             self.rnet = AttResUNet(extra_chn=1, out_chn=3, extra_mode='Both')
         elif self.args['model_name'] == '2HDEDNet':
             self.d3net = define_G(3, pretrained=True, model_name=self.args['model_name'])
@@ -39,19 +36,24 @@ class LitDDNet(pl.LightningModule):
         
         elif self.args['model_name'] == 'VDRNet':
             return self._forward_noise(image)
+            # return self.net(image)
 
         elif self.args['model_name'] == 'D3Net':
             return self.d3net(image)
 
     # TODO Rename this here and in `forward`
     def _forward_noise(self, image):
-        depth = torch.abs(self.dnet(image)[0]) + self.args['depth_min']
+        depth = self.dnet(image)[0]
+        
+        if self.args['prior_depth'] == 'gamma':
+            depth = torch.abs(depth) + self.args['depth_min']
+        
         aif = self.rnet(image, depth)
         depth = depth.squeeze()
 
         return depth, aif
 
-    def _defocus_images_noise(self, batch):
+    def _defocus_images(self, batch):
         aif_images, depths = batch
         aperture = torch.Tensor([self.args['f_number']] * len(batch[0])).float().cuda()
         focal_length = torch.Tensor([self.args['focal_length']] * len(batch[0])).float().cuda()
@@ -68,30 +70,22 @@ class LitDDNet(pl.LightningModule):
         elif self.args['prior_depth'] == 'laplacian':
             kl_depth = l1_norm
             self.p = 1
+        elif self.args['prior_depth'] == 'gamma':
+            kl_depth = kl_inverse_gamma
+            self.p = 2
             
         return kl_depth
-    
-    def reparameterlize_depth(self, depths):
-        if self.args['prior_depth'] == 'gaussian':
-            depths_sample = tdist.Normal(depths, 1 / (self.args['alpha'] * self.args['depth_max'])).rsample()
-        elif self.args['prior_depth'] == 'laplacian':
-            depths_sample = tdist.laplace.Laplace(depths, 1 / (self.args['alpha'] * self.args['depth_max'])).rsample()
-        elif self.args['prior_depth'] == 'gamma':
-            depths_sample = tdist.gamma.Gamma(self.args['alpha'] + 1, self.args['alpha'] / depths).rsample()
-        
-        return depths_sample
 
     def _VDRNet_loss(self, depths, aif_images, images, focal_distance, aperture, focal_length):
         output_depths, output_aif_images = self(images)
-        # reparameterization trick
-        output_aif_images_sample = output_aif_images + torch.randn_like(output_aif_images) / (self.args['mu'] * 255.0)
-        output_depths_sample = self.reparameterlize_depth(output_depths)
-        output_images, _ = self.generator(output_aif_images_sample, output_depths_sample, focal_distance, aperture, focal_length)
+        
+        output_images, _ = self.generator(output_aif_images, output_depths, focal_distance, aperture, focal_length)
         L_depth = self._kl_divergence_depth()(depths, output_depths, self.args['alpha'])
         L_image = mean_square_error(aif_images, output_aif_images, self.args['mu'])
         L_rec = mean_square_error(output_images, images, self.args['gamma'])
         L_additional = total_variation(output_depths, self.p, self.args['lambda_d']) + \
-                       total_variation(output_aif_images, self.p, self.args['lambda_z']) if self.args['smoothness'] else 0
+                       total_variation(output_aif_images, self.p, self.args['lambda_z']) \
+                       if self.args['smoothness'] else 0
 
         return {'loss': L_depth + L_image + L_rec + L_additional,
                 'output_depths': output_depths,
@@ -101,6 +95,7 @@ class LitDDNet(pl.LightningModule):
 
     def _2hdednet_loss(self, depths, aif_images, images, focal_distance, aperture, focal_length):
         output_depths, output_aif_images = self(images)
+        
         output_depths = output_depths.squeeze()
         output_images, _ = self.generator(output_aif_images, depths, focal_distance, aperture, focal_length)
         
@@ -120,7 +115,8 @@ class LitDDNet(pl.LightningModule):
                 'output_depths': output_depths}
 
     def training_step(self, batch, batch_idx):
-        images, depths, aif_images, focal_distance, aperture, focal_length = self._defocus_images_noise(batch)
+        images, depths, aif_images, focal_distance, aperture, focal_length = self._defocus_images(batch)
+        
         if self.args['model_name'] == 'VDRNet':
             outputs = self._VDRNet_loss(depths, aif_images, images, focal_distance, aperture, focal_length)
             loss, _, _, _ = outputs.values()
@@ -130,7 +126,7 @@ class LitDDNet(pl.LightningModule):
         elif self.args['model_name'] == 'D3Net':
             loss, _ = self._d3net_loss(depths, images).values()
             
-        self.log('train_loss', loss, on_step=True)
+        self.log('train/loss', loss, on_step=True)
         return loss
 
     def configure_optimizers(self):
@@ -142,7 +138,11 @@ class LitDDNet(pl.LightningModule):
 
     @torch.no_grad()
     def test_step(self, batch, batch_idx):
-        images, depths, aif_images, _, _, _ = self._defocus_images_noise(batch)
+        if len(batch) == 2:
+            images, depths, aif_images, _, _, _ = self._defocus_images(batch)
+        elif len(batch) == 3:
+            aif_images, images, depths = batch
+
         if self.args['model_name'] == '2HDEDNet':
             output_depths, output_aif_images = self(images)
             output_depths = output_depths.squeeze()
@@ -150,7 +150,7 @@ class LitDDNet(pl.LightningModule):
             output_depths, output_aif_images = self(images)
         elif self.args['model_name'] == 'D3Net':
             output_depths, output_aif_images = self(images)[0].squeeze(), aif_images
-        
+
         depths, output_depths = depths * self.args['depth_max'], output_depths * self.args['depth_max']
         mse_depth = mean_square_error(depths.squeeze(), output_depths)
         log_mse = log_mse_torch(depths.squeeze(), output_depths)
@@ -158,19 +158,19 @@ class LitDDNet(pl.LightningModule):
         delta1 = cal_delta(depths.squeeze(), output_depths, 1)
         delta2 = cal_delta(depths.squeeze(), output_depths, 2)
         delta3 = cal_delta(depths.squeeze(), output_depths, 3)
-        
+
         ssim_image = cal_ssim(aif_images, output_aif_images)
         psnr = PeakSignalNoiseRatio(data_range=1.0)
         psnr.update(output_aif_images, aif_images)
 
-        if batch_idx == 71:
+        if batch_idx == 75:
             save_depth_as_image(depths[0], f"output_images/{self.args['dataset']}/D.png")
             save_image(aif_images[0], f"output_images/{self.args['dataset']}/I.png")
             save_image(images[0], f"output_images/{self.args['dataset']}/J.png")
             save_image(output_aif_images[0], f"output_images/{self.args['dataset']}/I_{self.args['model_name']}.png")
+            if len(output_depths.shape) == 2:
+                output_depths.unsqueeze_(0)
             if self.args['model_name'] == 'VDRNet':
-                if len(output_depths.shape) == 2:
-                    output_depths.unsqueeze_(0)
                 save_depth_as_image(output_depths[0], f"output_images/{self.args['dataset']}/D_{self.args['model_name']}_{self.args['prior_depth']}.png")
             else:
                 save_depth_as_image(output_depths[0], f"output_images/{self.args['dataset']}/D_{self.args['model_name']}.png")
@@ -183,9 +183,10 @@ class LitDDNet(pl.LightningModule):
                              'delta_3': delta3, 
                              'psnr_aif': psnr.compute(),
                              'ssim_aif': ssim_image})
-        
+
         if self.args['dataset'] == 'make3d' and depths.max() <= 70.0:
             self.outputs_c1.append({'mse_depth': mse_depth, 
+                                    'log_mse_depth': log_mse, 
                                     'AbsRel': AbsRel, 
                                     'psnr_aif': psnr.compute(),
                                     'ssim_aif': ssim_image})
@@ -202,29 +203,35 @@ class LitDDNet(pl.LightningModule):
         psnr_aif = torch.stack([x['psnr_aif'] for x in outputs]).mean()
         ssim_aif = torch.stack([x['ssim_aif'] for x in outputs]).mean()
         
-        self.log('rmse_depth', rmse_depth.round(decimals=4))
-        self.log('log_rmse_depth', log_rmse_depth.round(decimals=4))
-        self.log('AbsRel', AbsRel.round(decimals=4))
-        self.log('delta_1', delta1.round(decimals=4))
-        self.log('delta_2', delta2.round(decimals=4))
-        self.log('delta_3', delta3.round(decimals=4))
-        self.log('psnr_aif', psnr_aif.round(decimals=4))
-        self.log('ssim_aif', ssim_aif.round(decimals=4))
+        self.log('test/rmse_depth', rmse_depth.round(decimals=4))
+        self.log('test/log_rmse_depth', log_rmse_depth.round(decimals=4))
+        self.log('test/AbsRel', AbsRel.round(decimals=4))
+        self.log('test/delta_1', delta1.round(decimals=4))
+        self.log('test/delta_2', delta2.round(decimals=4))
+        self.log('test/delta_3', delta3.round(decimals=4))
+        self.log('test/psnr_aif', psnr_aif.round(decimals=4))
+        self.log('test/ssim_aif', ssim_aif.round(decimals=4))
         
         if self.args['dataset'] == 'make3d':
             outputs_c1 = self.outputs_c1
             if len(outputs_c1) > 0:
                 rmse_depth_c1 = torch.sqrt(torch.stack([x['mse_depth'] for x in outputs_c1]).mean())
+                log_rmse_depth_c1 = torch.sqrt(torch.stack([x['log_mse_depth'] for x in outputs_c1]).mean())
                 AbsRel_c1 = torch.stack([x['AbsRel'] for x in outputs_c1]).mean()
                 psnr_aif_c1 = torch.stack([x['psnr_aif'] for x in outputs_c1]).mean()
                 ssim_aif_c1 = torch.stack([x['ssim_aif'] for x in outputs_c1]).mean()
-                self.log('c1_rmse_depth', rmse_depth_c1.round(decimals=4))
-                self.log('c1_AbsRel', AbsRel_c1.round(decimals=4))
-                self.log('c1_psnr_aif', psnr_aif_c1.round(decimals=4))
-                self.log('c1_ssim_aif', ssim_aif_c1.round(decimals=4))
+                self.log('test/c1_rmse_depth', rmse_depth_c1.round(decimals=4))
+                self.log('test/c1_log_rmse_depth', log_rmse_depth_c1.round(decimals=4))
+                self.log('test/c1_AbsRel', AbsRel_c1.round(decimals=4))
+                self.log('test/c1_psnr_aif', psnr_aif_c1.round(decimals=4))
+                self.log('test/c1_ssim_aif', ssim_aif_c1.round(decimals=4))
+
+    def on_validation_start(self):
+        if len(self.val_outputs) > 0:
+            self.val_outputs = []
 
     def validation_step(self, batch, batch_idx):
-        images, depths, aif_images, focal_distance, aperture, focal_length = self._defocus_images_noise(batch)
+        images, depths, aif_images, focal_distance, aperture, focal_length = self._defocus_images(batch)
         if self.args['model_name'] == 'VDRNet':
             outputs = self._VDRNet_loss(depths, aif_images, images, focal_distance, aperture, focal_length)
             loss, output_depths, output_aif_images, output_images = outputs.values()
@@ -236,14 +243,28 @@ class LitDDNet(pl.LightningModule):
             output_images, _ = self.generator(aif_images, output_depths, focal_distance, aperture, focal_length)
             output_aif_images = aif_images
 
-        self.log('val_loss', loss, sync_dist=True)
-        self.log('val_rmse_depth', self.args['depth_max'] * torch.sqrt(mean_square_error(output_depths, depths)), sync_dist=True)
-        self.log('val_AbsRel', cal_AbsRel(depths, output_depths), sync_dist=True)
-        self.log('val_ssim_image', cal_ssim(aif_images, output_aif_images), sync_dist=True)
+        self.val_outputs.append({'val_loss': loss, 
+                                'val_mse_depth': self.args['depth_max'] ** 2 * mean_square_error(output_depths, depths),
+                                'AbsRel': cal_AbsRel(depths, output_depths), 
+                                'ssim_aif': cal_ssim(aif_images, output_aif_images)})
+
+        self.log('val/loss', loss, sync_dist=True)
+        self.log('val/rmse_depth', self.args['depth_max'] * torch.sqrt(mean_square_error(output_depths, depths)), sync_dist=True)
+        self.log('val/AbsRel', cal_AbsRel(depths, output_depths), sync_dist=True)
+        self.log('val/ssim_image', cal_ssim(aif_images, output_aif_images), sync_dist=True)
 
         if batch_idx == 2:
             visualize_sample(images[0], output_images[0], aif_images[0], output_aif_images[0], depths[0], output_depths[0], self.logger, self.global_step)
         return loss
     
     def on_validation_end(self):
-        return super().on_validation_end()
+        val_outputs = self.val_outputs
+        val_loss = torch.stack([x['val_loss'] for x in val_outputs]).mean()
+        val_rmse_depth = torch.sqrt(torch.stack([x['val_mse_depth'] for x in val_outputs]).mean())
+        val_AbsRel = torch.stack([x['AbsRel'] for x in val_outputs]).mean()
+        val_ssim_aif = torch.stack([x['ssim_aif'] for x in val_outputs]).mean()
+        
+        self.logger.experiment.add_scalar("val/all_loss", val_loss, self.current_epoch)
+        self.logger.experiment.add_scalar("val/all_rmse_depth", val_rmse_depth, self.current_epoch)
+        self.logger.experiment.add_scalar("val/all_AbsRel", val_AbsRel, self.current_epoch)
+        self.logger.experiment.add_scalar("val/all_ssim_aif", val_ssim_aif, self.current_epoch)

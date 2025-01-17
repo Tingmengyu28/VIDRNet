@@ -16,6 +16,11 @@ def l1_norm(images, pred_images, weight=1):
     return  torch.mean(out) * weight
 
 
+def kl_inverse_gamma(depths, pred_depths, weight=1):
+    
+    return weight * torch.mean(pred_depths / depths + torch.log(depths) - torch.log(pred_depths) - 1)
+
+
 def _ssim(img1, img2, window, window_size, channel):
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
@@ -122,6 +127,6 @@ def log_mse_torch(depths, output_depths):
     ground_truth_depth = torch.clamp(depths, min=1e-6)
 
     # 计算对数差
-    log_diff = torch.log(predicted_depth) - torch.log(ground_truth_depth)
+    log_diff = torch.log10(predicted_depth) - torch.log10(ground_truth_depth)
 
     return torch.mean(log_diff ** 2)

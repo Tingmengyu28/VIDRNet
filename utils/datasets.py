@@ -4,6 +4,7 @@ import numpy as np
 import os
 import h5py
 import cv2
+import json
 import pytorch_lightning as pl
 from path import Path
 from scipy.io import loadmat
@@ -132,3 +133,170 @@ class Make3DDataModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
+
+
+class KITTIDataset(Dataset):
+    def __init__(self, root, image_size=(1216, 352), transform=False):
+        super(KITTIDataset, self).__init__()
+        self.root = root
+        self.image_size = image_size
+        self.transform = transform
+
+        scene = os.listdir(self.root)
+        self.org = sorted([x for x in scene if x.find('.png') != -1])
+        self.gt_depth = sorted([x for x in scene if x.find('.npy') != -1])
+
+        assert len(self.gt_depth) == len(self.org)
+
+    def __getitem__(self, idx):
+
+        img_gt_depth = np.load(os.path.join(self.root, self.gt_depth[idx]))
+        img_org = cv2.imread(os.path.join(self.root, self.org[idx]))
+        
+        img_gt_depth = cv2.resize(img_gt_depth, self.image_size, interpolation=cv2.INTER_LINEAR)
+        img_org = cv2.resize(img_org, self.image_size, interpolation=cv2.INTER_LINEAR)
+
+        if self.transform:
+            transform = transforms.Compose([
+                transforms.ToTensor(), 
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            img_org = transform(img_org)
+        else:
+            img_org = torch.from_numpy(img_org).permute(2, 0, 1).float() / 255
+
+        img_gt_depth = torch.from_numpy(img_gt_depth).float() / 80
+
+        img_gt_depth.requires_grad = False
+        img_org.requires_grad = False
+
+        return img_org, img_gt_depth
+
+    def __len__(self):
+        return len(self.org)
+
+
+class KITTIDataModule(pl.LightningDataModule):
+    def __init__(self, args, image_size, batch_size=16):
+        super().__init__()
+        self.args = args
+        self.image_size = image_size
+        self.batch_size = batch_size
+
+    def setup(self, stage=None):
+        self.train_dataset = KITTIDataset("data/kitti/kitti_pro/train", self.image_size)
+        self.val_dataset = KITTIDataset("data/kitti/kitti_pro/val", self.image_size)
+        self.test_dataset = KITTIDataset("data/kitti/kitti_pro/test", self.image_size)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.args['num_workers'])
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
+
+
+class KITTIGenDataset(Dataset):
+    def __init__(self, root, list_file, mode, image_size=(1216, 352)):
+        super(KITTIGenDataset, self).__init__()
+        self.root = root
+        with open(os.path.join(root, list_file), "r") as f:
+            self.scenes = json.load(f)[mode]
+
+        self.image_size = image_size
+
+    def __getitem__(self, idx):
+
+        image_path = os.path.join(self.root, self.scenes[idx]['rgb'])
+
+        img_org = cv2.imread(image_path)
+        img_org = cv2.resize(img_org, self.image_size, interpolation=cv2.INTER_LINEAR)
+
+        transform = transforms.Compose([
+            transforms.ToTensor(), 
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        img_org_trans = transform(img_org)
+
+        img_org_trans.requires_grad = False
+
+        return img_org, img_org_trans, idx
+
+    def __len__(self):
+        return len(self.org)
+    
+    
+class DFDDataset(Dataset):
+    def __init__(self, mode='train', image_size=(480, 640), transform=False):
+        super(DFDDataset, self).__init__()
+
+        aif_root = "data/dfd/dfd_indoor/dfd_dataset_indoor_N8/rgb"
+        dpt_root = "data/dfd/dfd_indoor/dfd_dataset_indoor_N8/depth"
+        dfc_root = "data/dfd/dfd_indoor/dfd_dataset_indoor_N2_8/rgb"
+        self.depth_path = os.path.join(dpt_root, 'test') if mode == 'val' else os.path.join(dpt_root, mode)
+        self.aif_path = os.path.join(aif_root, 'test') if mode == 'val' else os.path.join(aif_root, mode)
+        self.defocus_path = os.path.join(dfc_root, 'test') if mode == 'val' else os.path.join(dfc_root, mode)
+
+        self.image_size = image_size
+        self.transform = transform
+
+        self.gt_aif = sorted(list(os.listdir(self.aif_path)))
+        self.gt_dfc = sorted(list(os.listdir(self.defocus_path)))
+        self.gt_dpt = sorted(list(os.listdir(self.depth_path)))
+
+        assert len(self.gt_dpt) == len(self.gt_aif) == len(self.gt_dfc)
+
+    def __getitem__(self, idx):
+
+        gt_aif = cv2.imread(os.path.join(self.aif_path, self.gt_aif[idx]))
+        gt_dfc = cv2.imread(os.path.join(self.defocus_path, self.gt_dfc[idx]))
+        gt_dpt = cv2.imread(os.path.join(self.depth_path, self.gt_dpt[idx]))
+
+        gt_aif = cv2.resize(gt_aif, self.image_size, interpolation=cv2.INTER_LINEAR)
+        gt_dfc = cv2.resize(gt_dfc, self.image_size, interpolation=cv2.INTER_LINEAR)
+        gt_dpt = cv2.resize(gt_dpt, self.image_size, interpolation=cv2.INTER_LINEAR)
+
+        if self.transform:
+            transform = transforms.Compose([
+                transforms.ToTensor(), 
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            gt_aif = transform(gt_aif)
+        else:
+            gt_dfc = torch.from_numpy(gt_dfc).permute(2, 0, 1).float() / 255
+            gt_aif = torch.from_numpy(gt_aif).permute(2, 0, 1).float() / 255
+
+        gt_dpt = torch.from_numpy(gt_dpt).float() / 25.5
+
+        gt_aif.requires_grad = False
+        gt_dfc.requires_grad = False
+        gt_dpt.requires_grad = False
+
+        return gt_aif, gt_dfc, gt_dpt[:, :, 0]
+
+    def __len__(self):
+        return len(self.gt_aif)
+
+
+class DFDDataModule(pl.LightningDataModule):
+    def __init__(self, args, image_size, batch_size=16):
+        super().__init__()
+        self.args = args
+        self.image_size = image_size
+        self.batch_size = batch_size
+
+    def setup(self, stage=None):
+        self.train_dataset = DFDDataset("train", self.image_size)
+        self.val_dataset = DFDDataset("val", self.image_size)
+        self.test_dataset = DFDDataset("test", self.image_size)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.args['num_workers'])
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.args['num_workers'])

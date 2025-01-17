@@ -4,7 +4,7 @@ import time
 import os
 import json
 import pytorch_lightning as pl
-from utils.datasets import NYUDepthDataModule, Make3DDataModule
+from utils.datasets import NYUDepthDataModule, Make3DDataModule, KITTIDataModule, DFDDataModule
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from utils.process import LitDDNet
@@ -21,15 +21,15 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Depth estimation')
-    parser.add_argument('--mode', type=str, default='train', help='train or test or resume')
+    parser.add_argument('--mode', type=str, default='test', help='train or test or resume')
     pas = parser.parse_args()
     
     with open("configs.json", "r") as f:
         args = json.load(f)
 
     if args['model_name'] == 'VDRNet':
-        ckpt_name = f"{args['model_name']}{args['focal_distance']}(small)-D({args['prior_depth']}):a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['smoothness'] is False else \
-                    f"{args['model_name']}{args['focal_distance']}(small)-D({args['prior_depth']})-smooth:a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
+        ckpt_name = f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']}):a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}" if args['smoothness'] is False else \
+                    f"{args['model_name']}{args['focal_distance']}-D({args['prior_depth']})-smooth:a{args['alpha']}-m{args['mu']}-g{args['gamma']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     else:
         ckpt_name = f"{args['model_name']}{args['focal_distance']}:{time.strftime('%Y-%m-%d-%H-%M-%S')}"
     save_path = os.path.join(f"outputs/{args['dataset'] }/ckpts", ckpt_name)
@@ -38,9 +38,8 @@ if __name__ == "__main__":
     args['depth_min'] = 1e-3
     if args['dataset'] == "nyuv2":
         args['depth_max'] = 10.0
-        args['f_number'] = 2.8
         args['image_size'] = (480, 640)
-        if pas.mode == 'train':
+        if pas.mode in ['train', 'resume']:
             data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
         else:
             data_module = NYUDepthDataModule(args=args, image_size=args['image_size'], batch_size=1)
@@ -48,13 +47,29 @@ if __name__ == "__main__":
     elif args['dataset'] == "make3d":
         args['depth_max'] = 80.0
         args['image_size'] = (320, 480)
-        if pas.mode == 'train':
+        if pas.mode in ['train', 'resume']:
             data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
         else:
             data_module = Make3DDataModule(args=args, image_size=args['image_size'], batch_size=1)
 
+    elif args['dataset'] == "kitti":
+        args['depth_max'] = 80.0
+        args['image_size'] = (512, 160)
+        if pas.mode in ['train', 'resume']:
+            data_module = KITTIDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
+        else:
+            data_module = KITTIDataModule(args=args, image_size=args['image_size'], batch_size=1)
+            
+    elif args['dataset'] == "dfd":
+        args['depth_max'] = 10.0
+        args['image_size'] = (480, 640)
+        if pas.mode in ['train', 'resume']:
+            data_module = DFDDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
+        else:
+            data_module = DFDDataModule(args=args, image_size=args['image_size'], batch_size=1)
+
     checkpoint_callback = ModelCheckpoint(dirpath=save_path,
-                                          monitor="val_loss",
+                                          monitor="val/loss",
                                           save_last=True,
                                           every_n_epochs=args['save_epoch'])
     lr_monitor = LearningRateMonitor(logging_interval='step')

@@ -1,14 +1,16 @@
 /.idea
 /.vscode
 /__pycache__
-/allfileshas.txt
 /build
 /data
 /depths
 /dist
+/DiffusionDepth
 /draw_depth.py
 /draw_post.py
 /kitti.sh
+/kitti_reform.sh
+/kitti_depth.png
 /encode.py
 /gauss_psf_cuda.egg-info
 /make3d
@@ -20,3 +22,4 @@
 /preworks
 /SfmLearner-Pytorch
 /test.png
+/VADepthNet

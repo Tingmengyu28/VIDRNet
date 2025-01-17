@@ -1,8 +1,8 @@
 {
-    "dataset": "nyuv2",
-    "model_name": "VDRNet",
-    "smoothness": true,
-    "prior_depth": "gaussian",
+    "dataset": "dfd",
+    "model_name": "2HDEDNet",
+    "smoothness": false,
+    "prior_depth": "laplacian",
     "batch_size": 4,
     "max_epochs": 300,
     "learning_rate": 1e-4,
@@ -10,7 +10,7 @@
     "precision": "32",
     "num_workers": 4,
     "devices": [
-        5, 6
+        4
     ],
 
     "focal_length": 35e-3,
@@ -19,13 +19,13 @@
     "save_epoch": 10,
     "k_size": 7,
     "window_size": 7,
-    "focal_distance": 0.2,
+    "focal_distance": 0.4,
 
     "alpha": 10,
-    "mu": 1,
-    "gamma": 0.1,
+    "mu": 5,
+    "gamma": 0.5,
     "lambda_d": 0.1,
     "lambda_z": 0.0,
 
-    "load_path": "outputs/make3d/ckpts/VDRNet0.2(small)-D(gaussian)-smooth:a10-m10-g1:2024-12-25-02-11-21/epoch=189-step=9500.ckpt"
+    "load_path": "outputs/nyuv2/ckpts/main/D3Net0.4:2024-12-31-10-45-17/epoch=287-step=28800.ckpt"
 }
