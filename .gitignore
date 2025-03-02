@@ -22,4 +22,5 @@
 /preworks
 /SfmLearner-Pytorch
 /test.png
+/train_micro.py
 /VADepthNet

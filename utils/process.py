@@ -14,7 +14,18 @@ class LitDDNet(pl.LightningModule):
         super(LitDDNet, self).__init__()
         self.save_hyperparameters()
         self.args = args
-        self.generator = GaussPSF(args['k_size'], near=args['depth_min'], far=args['depth_max'], pixel_size=args['pixel_size'], scale=4).cuda()
+        if 'scale' in args:
+            self.generator = GaussPSF(args['k_size'], 
+                                    near=args['depth_min'], 
+                                    far=args['depth_max'], 
+                                    pixel_size=args['pixel_size'], 
+                                    scale=args['scale']).cuda()
+        else:
+            self.generator = GaussPSF(args['k_size'], 
+                                    near=args['depth_min'], 
+                                    far=args['depth_max'], 
+                                    pixel_size=args['pixel_size'], 
+                                    scale=4).cuda()
         self.val_outputs = []
         self.outputs = []
         if self.args['dataset'] == 'make3d':
@@ -49,17 +60,21 @@ class LitDDNet(pl.LightningModule):
             depth = torch.abs(depth) + self.args['depth_min']
         
         aif = self.rnet(image, depth)
-        depth = depth.squeeze()
+        depth = depth.squeeze(1)
 
         return depth, aif
 
     def _defocus_images(self, batch):
-        aif_images, depths = batch
         aperture = torch.Tensor([self.args['f_number']] * len(batch[0])).float().cuda()
         focal_length = torch.Tensor([self.args['focal_length']] * len(batch[0])).float().cuda()
         focal_distance = torch.Tensor([self.args['focal_distance']] * len(batch[0])).float().cuda()
-        images, betas = self.generator(aif_images, depths, focal_distance, aperture, focal_length)
-        images += torch.randn_like(images) / (self.args['alpha'] * 255.0)
+        if len(batch) == 2:
+            aif_images, depths = batch
+            images, betas = self.generator(aif_images, depths, focal_distance, aperture, focal_length)
+            images += torch.randn_like(images) / (self.args['alpha'] * 255.0)
+        elif len(batch) == 3:
+            aif_images, images, depths = batch
+            images += torch.randn_like(images) / (self.args['alpha'] * 255.0)
         
         return images, depths, aif_images, focal_distance, aperture, focal_length
 
@@ -96,7 +111,7 @@ class LitDDNet(pl.LightningModule):
     def _2hdednet_loss(self, depths, aif_images, images, focal_distance, aperture, focal_length):
         output_depths, output_aif_images = self(images)
         
-        output_depths = output_depths.squeeze()
+        output_depths = output_depths.squeeze(1)
         output_images, _ = self.generator(output_aif_images, depths, focal_distance, aperture, focal_length)
         
         L_depth = l1_norm(output_depths, depths) + total_variation(output_depths, 1, 0.01)
@@ -138,10 +153,7 @@ class LitDDNet(pl.LightningModule):
 
     @torch.no_grad()
     def test_step(self, batch, batch_idx):
-        if len(batch) == 2:
-            images, depths, aif_images, _, _, _ = self._defocus_images(batch)
-        elif len(batch) == 3:
-            aif_images, images, depths = batch
+        images, depths, aif_images, _, _, _ = self._defocus_images(batch)
 
         if self.args['model_name'] == '2HDEDNet':
             output_depths, output_aif_images = self(images)
@@ -163,7 +175,7 @@ class LitDDNet(pl.LightningModule):
         psnr = PeakSignalNoiseRatio(data_range=1.0)
         psnr.update(output_aif_images, aif_images)
 
-        if batch_idx == 75:
+        if batch_idx == 102:
             save_depth_as_image(depths[0], f"output_images/{self.args['dataset']}/D.png")
             save_image(aif_images[0], f"output_images/{self.args['dataset']}/I.png")
             save_image(images[0], f"output_images/{self.args['dataset']}/J.png")

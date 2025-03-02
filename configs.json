@@ -1,6 +1,6 @@
 {
     "dataset": "dfd",
-    "model_name": "2HDEDNet",
+    "model_name": "VDRNet",
     "smoothness": false,
     "prior_depth": "laplacian",
     "batch_size": 4,
@@ -10,7 +10,7 @@
     "precision": "32",
     "num_workers": 4,
     "devices": [
-        4
+        1
     ],
 
     "focal_length": 35e-3,
@@ -19,13 +19,14 @@
     "save_epoch": 10,
     "k_size": 7,
     "window_size": 7,
-    "focal_distance": 0.4,
+    "scale": 4,
+    "focal_distance": 0.2,
 
     "alpha": 10,
-    "mu": 5,
+    "mu": 10,
     "gamma": 0.5,
     "lambda_d": 0.1,
     "lambda_z": 0.0,
 
-    "load_path": "outputs/nyuv2/ckpts/main/D3Net0.4:2024-12-31-10-45-17/epoch=287-step=28800.ckpt"
+    "load_path": "outputs/dfd/ckpts/VDRNet0.2-D(laplacian):a10-m5-g0.5:2025-01-23-13-38-05/epoch=59-step=660.ckpt"
 }

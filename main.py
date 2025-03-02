@@ -21,7 +21,7 @@ class PrintAccuracyAndLossCallback(pl.Callback):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Depth estimation')
-    parser.add_argument('--mode', type=str, default='test', help='train or test or resume')
+    parser.add_argument('--mode', type=str, default='train', help='train or test or resume')
     pas = parser.parse_args()
     
     with open("configs.json", "r") as f:
@@ -62,7 +62,7 @@ if __name__ == "__main__":
             
     elif args['dataset'] == "dfd":
         args['depth_max'] = 10.0
-        args['image_size'] = (480, 640)
+        args['image_size'] = (640, 480)
         if pas.mode in ['train', 'resume']:
             data_module = DFDDataModule(args=args, image_size=args['image_size'], batch_size=args['batch_size'])
         else:
